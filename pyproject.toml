@@ -1,0 +1,30 @@
+[project]
+name = "simscrub"
+version = "0.1.0"
+description = "TE SimScrub: video in, SimReady USD out"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart",
+  "pydantic>=2",
+  "typer",
+  "usd-core",
+  "trimesh",
+  "numpy",
+  "opencv-python",
+  "ultralytics",
+  "torch",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+simscrub = "simscrub.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["simscrub*", "server*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+jobs/
+.env
+node_modules/
+ui/dist/
+*.tmp
+models/
+/mobileclip2_b.ts
+# capture footage and downloaded weights stay local
+/*.mp4
+/*.mov
+*.pt
