@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Callable
 
 from simscrub.errors import chip_for
-from simscrub.manifest import Job, Status
-from simscrub.stages import capture, segment
+from simscrub.manifest import Job, Recon, Status
+from simscrub.stages import capture, reconstruct, segment, simready, tripo
 
 Update = Callable[[Job], None]
 
@@ -94,5 +94,73 @@ def run_segment(job: Job, job_dir: Path, video: Path | None, update: Update,
         flagged = len(assets) - kept
         msg = f"{kept} boxes found" + (f" · {flagged} flagged" if flagged else "") + " · tap any to change"
         _set(job, "segment", Status.done, 1.0, msg)
+    job.save(job_dir / "manifest.json")
+    update(job)
+
+
+def reconstruct_plan(job: Job, job_dir: Path) -> dict:
+    """Cost preview for the RECONSTRUCT tab. Balance lookup is free."""
+    p = reconstruct.plan(job.assets, job_dir)
+    try:
+        p["balance"] = tripo.Tripo().balance()
+        p["chip"] = None
+    except Exception as e:  # noqa: BLE001 - shown as a chip, not a crash
+        p["balance"] = None
+        p["chip"] = chip_for(e)
+    return p
+
+
+def run_reconstruct(job: Job, job_dir: Path, update: Update) -> None:
+    kept = [a for a in job.assets if not a.excluded and a.crop]
+    for a in job.assets:
+        a.recon = Recon(source="tripo", status="queued") if a in kept else Recon()
+    _set(job, "reconstruct", Status.working, 0.0, f"Generating {len(kept)} meshes")
+    update(job)
+
+    def changed(_asset) -> None:
+        done = sum(1 for a in kept if a.recon.status in ("ready", "proxy", "failed"))
+        _set(job, "reconstruct", Status.working, done / max(1, len(kept)))
+        update(job)
+
+    try:
+        reconstruct.reconstruct(job.assets, job_dir, changed)
+    except Exception as e:  # noqa: BLE001 - e.g. bad key: every box falls back to proxy
+        chip = chip_for(e)
+        for a in kept:
+            if a.recon.status in ("queued", "working"):
+                reconstruct._to_proxy(a, job_dir, chip)
+
+    ready = sum(1 for a in kept if a.recon.status == "ready")
+    proxies = len(kept) - ready
+    msg = f"{ready} meshes ready" + (f" · {proxies} proxy" if proxies else "")
+    _set(job, "reconstruct", Status.attention if proxies else Status.done, 1.0, msg)
+    job.save(job_dir / "manifest.json")
+    update(job)
+
+
+def run_simready(job: Job, job_dir: Path, update: Update) -> None:
+    todo = [a for a in job.assets if not a.excluded and a.recon.mesh]
+    for a in job.assets:
+        a.prep, a.checks = [], []
+    _set(job, "simready", Status.working, 0.0, f"Cleaning {len(todo)} assets")
+    update(job)
+
+    for n, a in enumerate(todo):
+        _set(job, "simready", Status.working, n / max(1, len(todo)), f"{a.id}: cleaning")
+
+        def changed(_a, n=n) -> None:
+            done = sum(s.status in ("done", "skipped", "failed") for s in _a.prep) / max(1, len(_a.prep))
+            _set(job, "simready", Status.working, (n + done) / max(1, len(todo)))
+            update(job)
+
+        simready.prepare(a, job.assets, job_dir, changed)
+
+    failed = [a for a in todo if any(s.status == "failed" for s in a.prep)]
+    flagged = [a for a in todo if any(c.status in ("warn", "fail") for c in a.checks)
+               or a.dims_source != "tape" or a.recon.status == "proxy"]
+    msg = f"{len(todo) - len(failed)}/{len(todo)} assets SimReady"
+    if flagged:
+        msg += f" · {len(flagged)} need a look"
+    _set(job, "simready", Status.attention if (failed or flagged) else Status.done, 1.0, msg)
     job.save(job_dir / "manifest.json")
     update(job)

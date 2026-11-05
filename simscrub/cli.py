@@ -66,5 +66,59 @@ def segment_cmd(
     typer.echo(f"\nOverlay: {job_dir / 'segment_overlay.jpg'}")
 
 
+@app.command("reconstruct")
+def reconstruct_cmd(
+    job: str = typer.Option("office", help="Job folder name under jobs/"),
+    plan_only: bool = typer.Option(False, "--plan", help="Show the cost and balance, spend nothing"),
+):
+    """Generate a mesh per kept box with Tripo; proxies fill any gaps."""
+    j, job_dir = _job(job)
+    p = pipeline.reconstruct_plan(j, job_dir)
+    bal = "unknown" if p["balance"] is None else f"{p['balance']:.0f}"
+    typer.echo(f"{p['boxes']} boxes · {p['cached']} cached · {p['to_generate']} to generate · "
+               f"{p['credits']} credits (${p['credits'] / 100:.2f}) · balance {bal}")
+    if p["chip"]:
+        typer.echo(f"  ! {p['chip']}")
+    if plan_only:
+        return
+    pipeline.run_reconstruct(j, job_dir, _printer())
+    typer.echo(f"\n{j.stages['reconstruct'].message}")
+    for a in j.assets:
+        if a.excluded:
+            continue
+        r = a.recon
+        typer.echo(f"  {a.id}  {r.status:<6} {r.source or '':<6} {r.tris or 0:>8} tris  {r.chip or ''}")
+
+
+@app.command("simready")
+def simready_cmd(job: str = typer.Option("office", help="Job folder name under jobs/")):
+    """Clean every mesh into a validated SimReady USD asset, step by step."""
+    j, job_dir = _job(job)
+
+    def update(job: Job) -> None:
+        pass
+
+    pipeline.run_simready(j, job_dir, update)
+    typer.echo(j.stages["simready"].message)
+    for a in j.assets:
+        if a.excluded or not a.prep:
+            continue
+        typer.echo("")
+        typer.echo(f"{a.id}  {a.usd or ''}")
+        for s in a.prep:
+            typer.echo(f"  [{s.status:<7}] {s.name:<20} {s.detail}")
+        for c in a.checks:
+            typer.echo(f"      {c.status:<4} {c.label:<20} {c.detail}")
+
+
+@app.command("validate")
+def validate_cmd(path: Path = typer.Argument(..., exists=True, help="Asset .usda/.usd")):
+    """Run the SimReady rule set against any USD asset."""
+    from simscrub.usd.validate import validate
+
+    for c in validate(path):
+        typer.echo(f"  {c.status:<4} {c.label:<20} {c.detail}")
+
+
 if __name__ == "__main__":
     app()

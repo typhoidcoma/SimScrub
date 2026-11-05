@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Job, StageState, Status } from "./types";
 import { STAGES } from "./types";
 
@@ -27,7 +27,7 @@ export function Header({ online, job }: { online: boolean; job: Job | null }) {
         </div>
       </div>
       <div className="hdr-right">
-        <span className="label">Project {job?.id.split("-")[1] ?? "---"}</span>
+        <span className="label">Project · {job?.id ?? "—"}</span>
         <StatusDot s={online ? "done" : "attention"} text={online ? "Online" : "Offline"} />
       </div>
     </header>
@@ -85,8 +85,10 @@ export function ProcessMonitor({ job, showLog, onToggleLog }: { job: Job | null;
         <span className="spacer" />
         <button className="tag" onClick={onToggleLog}>{showLog ? "Hide log" : "Show log"}</button>
         <span className="label">
-          Stage {String(current >= 0 ? current + 1 : lit === SEGS ? 5 : 0).padStart(2, "0")} / 05 ·{" "}
-          {String(Math.round(total * 100)).padStart(3, "0")}%
+          {current >= 0
+            ? `Running 0${current + 1} / 05`
+            : `${job ? STAGES.filter((s) => ["done", "attention"].includes(job.stages[s].status)).length : 0} / 5 stages done`}{" "}
+          · {Math.round(total * 100)}%
         </span>
       </div>
       <div className="segs">
@@ -125,5 +127,50 @@ export function Footer({ job }: { job: Job | null }) {
         text={bad ? "Stage stopped" : warn ? "Systems nominal · items flagged" : "All systems nominal"}
       />
     </footer>
+  );
+}
+
+/** Click-to-rename project title. Enter or click away saves, Esc cancels. */
+export function ProjectName({ name }: { name: string }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    if (draft === null) return;
+    const next = draft.trim();
+    setDraft(null);
+    if (!next || next === name) return;
+    const r = await fetch("/api/job/name", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: next }),
+    });
+    setErr(r.ok ? null : (await r.json().catch(() => ({}))).detail ?? "Could not rename");
+  };
+
+  return (
+    <>
+      {draft === null ? (
+        <h1 className="project-name" title="Click to rename" onClick={() => setDraft(name)}>
+          {name}
+          <span className="rename-hint" aria-hidden="true">Rename</span>
+        </h1>
+      ) : (
+        <input
+          className="project-name-input"
+          autoFocus
+          value={draft}
+          maxLength={60}
+          aria-label="Project name"
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Escape") setDraft(null);
+          }}
+        />
+      )}
+      {err && <div className="chip">{err}</div>}
+    </>
   );
 }

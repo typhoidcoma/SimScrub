@@ -13,3 +13,4 @@ models/
 /*.mp4
 /*.mov
 *.pt
+cache/

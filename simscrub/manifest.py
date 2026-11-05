@@ -40,12 +40,26 @@ class Dims(BaseModel):
     h: float
 
 
+class Step(BaseModel):
+    """One visible step of work on an asset, so the artist sees what the tool did."""
+
+    name: str
+    status: Literal["waiting", "working", "done", "skipped", "failed"] = "waiting"
+    detail: str = ""
+
+
 class Recon(BaseModel):
     source: Literal["tripo", "triposr", "proxy"] | None = None
     status: Literal["queued", "working", "ready", "proxy", "failed"] = "queued"
-    chip: str | None = None  # plain-language reason, never a stack trace
-    mesh: str | None = None  # job-relative path to GLB
-    tris: int | None = None
+    chip: str | None = None          # plain-language reason, never a stack trace
+    mesh: str | None = None          # job-relative path to the GLB exactly as generated
+    tris: int | None = None          # triangles in that GLB
+    size_mb: float | None = None
+    texture_px: int | None = None    # base colour texture resolution
+    seconds: float | None = None     # generation time at Tripo
+    credits: float | None = None     # credits this mesh cost (0 when cached)
+    task_id: str | None = None
+    steps: list[Step] = Field(default_factory=list)
 
 
 class Check(BaseModel):
@@ -69,11 +83,14 @@ class Asset(BaseModel):
     flag: str | None = None                                 # why the pipeline pre-excluded it
     measured: Dims | None = None
     dims: Dims | None = None                  # final dims used (measured or inferred)
-    dims_source: Literal["tape", "inferred"] | None = None
+    dims_source: Literal["tape", "inferred", "estimated"] | None = None
     thumb: str | None = None
     recon: Recon = Field(default_factory=Recon)
+    prep: list[Step] = Field(default_factory=list)   # SimReady steps, shown in the UI
     checks: list[Check] = Field(default_factory=list)
-    usd: str | None = None
+    usd: str | None = None                            # job-relative SimReady .usda
+    clean_mesh: str | None = None                     # job-relative GLB of the cleaned mesh, for the viewer
+    clean_tris: int | None = None
 
 
 class Capture(BaseModel):

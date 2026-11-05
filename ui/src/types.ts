@@ -7,12 +7,24 @@ export const STAGES: StageName[] = ["capture", "segment", "reconstruct", "simrea
 export interface StageState { status: Status; progress: number; message: string }
 export interface Dims { l: number; w: number; h: number }
 
+export interface Step {
+  name: string;
+  status: "waiting" | "working" | "done" | "skipped" | "failed";
+  detail: string;
+}
+
 export interface Recon {
   source: "tripo" | "triposr" | "proxy" | null;
   status: "queued" | "working" | "ready" | "proxy" | "failed";
   chip: string | null;
   mesh: string | null;
   tris: number | null;
+  size_mb: number | null;
+  texture_px: number | null;
+  seconds: number | null;
+  credits: number | null;
+  task_id: string | null;
+  steps: Step[];
 }
 
 export interface Check {
@@ -36,11 +48,14 @@ export interface Asset {
   flag: string | null;
   measured: Dims | null;
   dims: Dims | null;
-  dims_source: "tape" | "inferred" | null;
+  dims_source: "tape" | "inferred" | "estimated" | null;
   thumb: string | null;
   recon: Recon;
+  prep: Step[];
   checks: Check[];
   usd: string | null;
+  clean_mesh: string | null;
+  clean_tris: number | null;
 }
 
 export interface Job {

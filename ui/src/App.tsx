@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Footer, Header, ProcessMonitor, Tabs } from "./components";
+import { Footer, Header, ProcessMonitor, ProjectName, Tabs } from "./components";
 import { type Source, CapturePanel, ReconstructPanel, SegmentPanel, SimReadyPanel, StagePanel } from "./panels";
+import { TabVisible } from "./tabVisible";
 import { STAGES, type StageName } from "./types";
 import { api, useJob } from "./useJob";
 
@@ -65,7 +66,7 @@ export default function App() {
               <span className="label">
                 <span className="n">0{idx + 1}</span> / {TITLES[active]}
               </span>
-              <h1>{job?.name ?? "Home office"}</h1>
+              <ProjectName name={job?.name ?? "Untitled project"} />
               <div className="sub">
                 {kept} boxes · {proxies} proxy · {approved}/5 stages approved
               </div>
@@ -81,13 +82,17 @@ export default function App() {
           {error && <div className="chip">{error}</div>}
 
           <div className="tab-body">
-            <div hidden={active !== "capture"}><CapturePanel job={job} busy={busy} onProcess={process} /></div>
-            <div hidden={active !== "segment"}>
+            <div hidden={active !== "capture"}><TabVisible.Provider value={active === "capture"}><CapturePanel job={job} busy={busy} onProcess={process} /></TabVisible.Provider></div>
+            <div hidden={active !== "segment"}><TabVisible.Provider value={active === "segment"}>
               <SegmentPanel job={job} onToggle={(id) => run(`/api/assets/${id}/exclude`)} />
-            </div>
-            <div hidden={active !== "reconstruct"}><ReconstructPanel job={job} /></div>
-            <div hidden={active !== "simready"}><SimReadyPanel job={job} /></div>
-            <div hidden={active !== "stage"}><StagePanel job={job} /></div>
+            </TabVisible.Provider></div>
+            <div hidden={active !== "reconstruct"}><TabVisible.Provider value={active === "reconstruct"}>
+              <ReconstructPanel job={job} busy={busy} onGenerate={() => { setPicked(null); run("/api/reconstruct"); }} />
+            </TabVisible.Provider></div>
+            <div hidden={active !== "simready"}><TabVisible.Provider value={active === "simready"}>
+              <SimReadyPanel job={job} busy={busy} onRun={() => { setPicked(null); run("/api/simready"); }} />
+            </TabVisible.Provider></div>
+            <div hidden={active !== "stage"}><TabVisible.Provider value={active === "stage"}><StagePanel job={job} /></TabVisible.Provider></div>
           </div>
 
           <ProcessMonitor job={job} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />

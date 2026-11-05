@@ -40,6 +40,14 @@ class VideoUnreadable(SimScrubError):
 def chip_for(exc: BaseException) -> str:
     if isinstance(exc, SimScrubError):
         return exc.chip
+    try:
+        import requests
+        if isinstance(exc, requests.Timeout):
+            return ReconTimeout.chip
+        if isinstance(exc, requests.ConnectionError):
+            return "Lost the network connection. Swapped in a proxy box."
+    except ImportError:
+        pass
     name = type(exc).__name__.lower()
     if "timeout" in name:
         return ReconTimeout.chip

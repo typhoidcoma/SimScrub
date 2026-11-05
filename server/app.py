@@ -17,7 +17,9 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse
 
 from simscrub import pipeline
-from simscrub.manifest import Job, LogLine
+from pydantic import BaseModel
+
+from simscrub.manifest import Dims, Job, LogLine
 
 ROOT = Path(__file__).resolve().parent.parent
 JOBS = ROOT / "jobs"
@@ -31,7 +33,7 @@ VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
 def _initial_job() -> Job:
     """Reopen the last job so a server restart doesn't lose the artist's work."""
     path = JOBS / "office" / "manifest.json"
-    return Job.load(path) if path.exists() else Job(id="office", name="Home office")
+    return Job.load(path) if path.exists() else Job(id="office", name="Untitled project")
 
 
 class Hub:
@@ -92,7 +94,9 @@ def _run_pipeline(job: Job, job_dir: Path, video: Path, display_name: str) -> No
 async def _start(video: Path, job_id: str, display_name: str) -> None:
     hub.loop = asyncio.get_running_loop()
     job_dir = JOBS / job_id
-    job = Job(id=job_id, name="Home office")
+    # Re-processing keeps the artist's project name.
+    name = hub.job.name if hub.job.id == job_id else "Untitled project"
+    job = Job(id=job_id, name=name)
     hub.job = job
     hub.task = asyncio.create_task(asyncio.to_thread(_run_pipeline, job, job_dir, video, display_name))
 
@@ -128,6 +132,92 @@ async def process(video: UploadFile | None = File(None), path: str | None = None
         raise HTTPException(400, "Drop a walkthrough video first.")
     await _start(dest, job, name)
     return {"ok": True}
+
+
+@app.get("/api/reconstruct/plan")
+async def reconstruct_plan() -> dict:
+    """Cost preview before anything is spent. The balance lookup is free."""
+    return await asyncio.to_thread(pipeline.reconstruct_plan, hub.job, hub.job_dir)
+
+
+@app.post("/api/reconstruct")
+async def reconstruct_run() -> dict:
+    if hub.busy:
+        raise HTTPException(409, "A run is already in progress.")
+    if not any(not a.excluded and a.crop for a in hub.job.assets):
+        raise HTTPException(400, "No boxes to generate. Run Segment first.")
+    hub.loop = asyncio.get_running_loop()
+    job, job_dir = hub.job, hub.job_dir
+
+    def run() -> None:
+        try:
+            pipeline.run_reconstruct(job, job_dir, hub.push_from_thread)
+        except Exception:  # noqa: BLE001
+            job.log.append(LogLine(t=0, stage="error", text=traceback.format_exc(limit=3)))
+            job.save(job_dir / "manifest.json")
+            hub.push_from_thread(job)
+
+    hub.task = asyncio.create_task(asyncio.to_thread(run))
+    return {"ok": True}
+
+
+@app.post("/api/simready")
+async def simready_run() -> dict:
+    if hub.busy:
+        raise HTTPException(409, "A run is already in progress.")
+    if not any(not a.excluded and a.recon.mesh for a in hub.job.assets):
+        raise HTTPException(400, "No meshes to clean. Run Reconstruct first.")
+    hub.loop = asyncio.get_running_loop()
+    job, job_dir = hub.job, hub.job_dir
+
+    def run() -> None:
+        try:
+            pipeline.run_simready(job, job_dir, hub.push_from_thread)
+        except Exception:  # noqa: BLE001
+            job.log.append(LogLine(t=0, stage="error", text=traceback.format_exc(limit=3)))
+            job.save(job_dir / "manifest.json")
+            hub.push_from_thread(job)
+
+    hub.task = asyncio.create_task(asyncio.to_thread(run))
+    return {"ok": True}
+
+
+class Rename(BaseModel):
+    name: str
+
+
+@app.put("/api/job/name")
+async def rename_job(body: Rename) -> dict:
+    """Artist-facing project name. The job folder id stays the same."""
+    name = " ".join(body.name.split())
+    if not 1 <= len(name) <= 60:
+        raise HTTPException(400, "Give the project a name (1–60 characters).")
+    hub.job.name = name
+    await hub.broadcast(hub.job)
+    return {"ok": True, "name": name}
+
+
+class Measure(BaseModel):
+    l: float | None = None
+    w: float | None = None
+    h: float | None = None
+
+
+@app.put("/api/assets/{asset_id}/measured")
+async def set_measured(asset_id: str, m: Measure) -> dict:
+    """Tape size in cm for one box; send nulls to clear it."""
+    for a in hub.job.assets:
+        if a.id == asset_id:
+            vals = [m.l, m.w, m.h]
+            if all(v is None for v in vals):
+                a.measured = None
+            elif any(v is None or not 1 <= v <= 300 for v in vals):
+                raise HTTPException(400, "Enter length, width and height in cm (1–300).")
+            else:
+                a.measured = Dims(l=m.l, w=m.w, h=m.h)
+            await hub.broadcast(hub.job)
+            return {"ok": True}
+    raise HTTPException(404, f"No asset {asset_id}.")
 
 
 @app.get("/api/videos")
