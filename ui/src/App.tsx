@@ -62,10 +62,7 @@ export default function App() {
         <Tabs job={job} active={active} onPick={(s) => pick(s as StageName)} />
         <main className="body">
           <div className="hero">
-            <div>
-              <span className="label">
-                <span className="n">0{idx + 1}</span> / {TITLES[active]}
-              </span>
+            <div className="hero-main">
               <ProjectName name={job?.name ?? "Untitled project"} />
               <div className="sub">
                 {kept} boxes · {proxies} proxy · {approved}/5 stages approved

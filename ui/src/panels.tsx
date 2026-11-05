@@ -1,3 +1,4 @@
+import type React from "react";
 import { useContext, useEffect, useRef, useState } from "react";
 import { TabVisible } from "./tabVisible";
 import { Panel, StatusDot } from "./components";
@@ -110,7 +111,10 @@ export function SegmentPanel({ job, onToggle }: { job: Job | null; onToggle: (id
       className="span-2"
       right={assets.length ? <span className="label">{kept} / {assets.length} kept</span> : undefined}
     >
-      <div className="frame-view" style={res ? { aspectRatio: `${res[0]} / ${res[1]}` } : undefined}>
+      <div
+        className="frame-view"
+        style={res ? ({ aspectRatio: `${res[0]} / ${res[1]}`, "--ar": res[0] / res[1] } as React.CSSProperties) : undefined}
+      >
         {frame ? <img src={frame} alt="Walkthrough frame" /> : <div className="frame-empty label dim">Sharpest frame appears here</div>}
 
         {/* True outlines for boxes visible in the hero frame */}
@@ -179,14 +183,15 @@ interface Plan {
   chip: string | null;
 }
 
-function StepList({ steps }: { steps: Step[] }) {
+function StepList({ steps, full = false }: { steps: Step[]; full?: boolean }) {
   return (
     <ol className="steps">
       {steps.map((s, i) => (
-        <li key={i} className={`step ${s.status}`}>
+        <li key={i} className={`step ${s.status} ${s.more ? "has-more" : ""}`} title={!full && s.more ? s.more : undefined}>
           <span className={`dot ${STEP_DOT[s.status]}`} />
           <span className="step-name">{s.name}</span>
           <span className="step-detail">{s.detail}</span>
+          {full && s.more && <span className="step-more">{s.more}</span>}
         </li>
       ))}
     </ol>
@@ -270,7 +275,7 @@ function Inspector({ job, a, onClose }: { job: Job; a: Asset; onClose: () => voi
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const rows: [string, string][] = [
-    ["Source", r.source === "proxy" ? "Fitted proxy cuboid" : "Tripo image-to-3D · v3.1 · standard texture"],
+    ["Source", r.source === "proxy" ? "Fitted proxy cuboid" : `Tripo image-to-3D · v3.1 · standard texture${r.tris && r.tris > 600_000 ? " · uncapped" : " · capped at 500k tris"}`],
     ["Triangles", r.tris ? r.tris.toLocaleString() : "—"],
     ["File size", r.size_mb ? `${r.size_mb} MB` : "—"],
     ["Texture", r.texture_px ? `${r.texture_px} × ${r.texture_px} base colour` : "None"],
@@ -427,8 +432,8 @@ function TapeInputs({ a, disabled }: { a: Asset; disabled: boolean }) {
 
   return (
     <div className="tape">
-      <span className="label dim" title="Tape measure: length, width, height in cm. Leave empty to estimate.">
-        Tape size · cm
+      <span className="label dim" title="Optional. Leave empty and the size is a best guess from the box's proportions.">
+        Tape cm
       </span>
       <div className="tape-row">
         {["L", "W", "H"].map((p, i) => (
@@ -445,7 +450,7 @@ function TapeInputs({ a, disabled }: { a: Asset; disabled: boolean }) {
           />
         ))}
         <span className={`label ${saved ? "" : "dim"}`} style={{ color: saved ? "var(--green)" : undefined }}>
-          {saved ? "Saved" : a.measured ? "Measured" : "Estimate"}
+          {saved ? "Saved" : a.measured ? "Measured" : "Best guess"}
         </span>
       </div>
       {err && <div className="chip">{err}</div>}
@@ -455,6 +460,8 @@ function TapeInputs({ a, disabled }: { a: Asset; disabled: boolean }) {
 
 function SimReadyCard({ job, a, busy, onOpen }: { job: Job; a: Asset; busy: boolean; onOpen: () => void }) {
   const [view, setView] = useState<"clean" | "raw">("clean");
+  const [showChecks, setShowChecks] = useState(false);
+  const allPass = a.checks.length > 0 && a.checks.every((c) => c.status === "pass");
   const raw = a.recon.mesh ? `${fileUrl(job, a.recon.mesh)}?v=${a.recon.tris ?? 0}` : undefined;
   const clean = a.clean_mesh ? `${fileUrl(job, a.clean_mesh)}?v=${a.clean_tris ?? 0}-${a.dims?.l ?? 0}` : undefined;
   const shown = view === "clean" ? clean : raw;
@@ -467,6 +474,11 @@ function SimReadyCard({ job, a, busy, onOpen }: { job: Job; a: Asset; busy: bool
         {a.recon.status === "proxy" && <span className="tag orange">Proxy</span>}
         <span className="spacer" />
         <span className="label dim">{a.dims ? `${cm(a.dims)} cm` : ""}</span>
+        {allPass && (
+          <button className="tag" onClick={() => setShowChecks((v) => !v)} title="The 9 validation checks run on the written USD">
+            {showChecks ? "Hide checks" : "Checks"}
+          </button>
+        )}
       </div>
 
       <div className="sr-view">
@@ -486,7 +498,7 @@ function SimReadyCard({ job, a, busy, onOpen }: { job: Job; a: Asset; busy: bool
 
       {a.prep.length > 0 && <StepList steps={a.prep} />}
 
-      {a.checks.length > 0 && (
+      {a.checks.length > 0 && (allPass && !showChecks ? null : (
         <div className="sr-checks">
           {a.checks.map((c) => (
             <div key={c.rule} className={`check-row ${c.status}`} title={c.detail}>
@@ -496,7 +508,7 @@ function SimReadyCard({ job, a, busy, onOpen }: { job: Job; a: Asset; busy: bool
             </div>
           ))}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -526,7 +538,7 @@ function CompareInspector({ job, a, onClose }: { job: Job; a: Asset; onClose: ()
             <div className="inspector-view">{a.clean_mesh && <MeshView src={fileUrl(job, a.clean_mesh)!} auto={false} />}</div>
           </div>
         </div>
-        <StepList steps={a.prep} />
+        <div className="inspector-steps"><StepList steps={a.prep} full /></div>
         <span className="label dim">USD: jobs/{job.id}/{a.usd}</span>
       </div>
     </div>
@@ -547,22 +559,22 @@ export function SimReadyPanel({ job, busy, onRun }: { job: Job | null; busy: boo
       {reconDone && (
         <div className="cost">
           <div className="cost-item"><span className="label dim">Assets</span><b>{assets.length}</b></div>
-          <div className={`cost-item ${measured === 0 ? "warn" : ""}`}>
-            <span className="label dim">Tape-measured</span><b>{measured} / {assets.length}</b>
+          <div className="cost-item">
+            <span className="label dim">Sized by</span>
+            <b>{measured ? `${measured} tape · ${assets.length - measured} guess` : "Best guess"}</b>
           </div>
           <div className="cost-item"><span className="label dim">USD written</span><b>{written}</b></div>
+          <span className="cost-note">
+            Sizes are matched to the closest common carton by proportions. Type a tape size to override; it also
+            anchors the others.
+          </span>
           <span className="spacer" />
           <button className="btn btn-primary" disabled={busy || !assets.length} onClick={onRun}>
             {written ? "Re-run SimReady" : `Run SimReady on ${assets.length} assets`}
           </button>
         </div>
       )}
-      {reconDone && measured === 0 && (
-        <div className="note">
-          Enter the tape size of the boxes you measured. Measured boxes get true scale; the rest are matched to them.
-          With no measurements at all, boxes are assumed 40 cm long and flagged.
-        </div>
-      )}
+
       {assets.length && job ? (
         <div className="checks sr-grid">
           {assets.map((a) => <SimReadyCard key={a.id} job={job} a={a} busy={busy} onOpen={() => setOpen(a.id)} />)}

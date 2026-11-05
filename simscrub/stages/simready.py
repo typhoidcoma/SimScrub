@@ -26,6 +26,7 @@ import trimesh
 
 from simscrub.errors import chip_for
 from simscrub.manifest import Asset, Check, Dims, Step
+from simscrub.sizing import guess_size
 from simscrub.stages import meshops
 from simscrub.usd.author import CARDBOARD_RGB, CARDBOARD_ROUGHNESS, FRICTION, LABEL, BoxAsset, write_box
 from simscrub.usd.validate import validate
@@ -34,9 +35,8 @@ Changed = Callable[[Asset], None]
 
 TARGET_TRIS = 20_000
 CARDBOARD_GSM = 550           # g/m², single-wall corrugated
-DEFAULT_LONG_SIDE_M = 0.40    # only when no box was tape-measured at all
 
-STEP_NAMES = ["Repair", "Decimate", "Orient", "Scale to tape size", "Collider",
+STEP_NAMES = ["Repair", "Decimate", "Orient", "Scale to real size", "Collider",
               "Physics + label", "Write USD", "Validate"]
 
 Y_UP_TO_Z_UP = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], float)
@@ -94,16 +94,16 @@ def _target_dims(a: Asset, all_assets: list[Asset], cur: np.ndarray) -> tuple[np
         lw = sorted([a.measured.l, a.measured.w], reverse=True)
         t = np.array([lw[0], lw[1], a.measured.h]) / 100
         return t, "tape", "tape measurement"
-    longs = [max(b.measured.l, b.measured.w) for b in all_assets if b.measured and not b.excluded]
-    if longs:
-        long_m = float(np.median(longs)) / 100
-        why = f"no tape size; matched median measured box ({long_m * 100:.0f} cm long)"
-        src = "inferred"
-    else:
-        long_m = DEFAULT_LONG_SIDE_M
-        why = f"no tape sizes entered; assumed {long_m * 100:.0f} cm long"
-        src = "estimated"
-    return cur * (long_m / cur[0]), src, why
+    # Best guess: closest common carton by proportions; uniform scale keeps the
+    # mesh's own shape. Measured boxes in the job, if any, anchor the size.
+    longs = [max(b.measured.l, b.measured.w) / 100 for b in all_assets if b.measured and not b.excluded]
+    centre = float(np.median(longs)) if longs else None
+    g = guess_size(cur, centre)
+    ratio = " : ".join(f"{v / cur[0]:.2f}" for v in cur)
+    why = f"best guess: proportions {ratio} closest to a common {g.label} carton"
+    if centre:
+        why += f" (sized near your measured boxes)"
+    return cur * (g.long_m / cur[0]), "inferred" if centre else "estimated", why
 
 
 def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> None:
@@ -112,8 +112,10 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
     a.checks = []
     changed(a)
 
-    def step(name: str, status: str, detail: str = "") -> None:
+    def step(name: str, status: str, detail: str = "", more: str = "") -> None:
         steps[name].status, steps[name].detail = status, detail
+        if more:
+            steps[name].more = more
         changed(a)
 
     work = job_dir / "work" / a.id
@@ -147,22 +149,30 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
                             + (f" (re-joined {r['stitched_pieces']} split pieces)" if r["stitched_pieces"] else ""))
             if r["degenerate_faces"]:
                 bits.append(f"{_fmt(r['degenerate_faces'])} degenerate faces dropped")
-            step("Repair", "done", " · ".join(bits))
+            short = (f"{r['floaters_removed']} floaters removed" if r["floaters_removed"] else "No floaters")
+            short += f" · {_fmt(r['duplicate_verts'])} dup verts merged"
+            step("Repair", "done", short, " · ".join(bits))
 
             current = "Decimate"
             step("Decimate", "working", f"{_fmt(r['after']['faces'])} → ~{_fmt(TARGET_TRIS)} tris, keeping UVs")
             d = meshops.run_isolated("decimate", work / "repaired.obj", work / "decimated.obj", TARGET_TRIS)
             pct = 100 * (1 - d["after"] / max(1, d["before"]))
-            step("Decimate", "done", f"{_fmt(d['before'])} → {_fmt(d['after'])} tris (−{pct:.1f}%)")
+            step("Decimate", "done", f"{_fmt(d['before'])} → {_fmt(d['after'])} tris (−{pct:.1f}%)",
+                 "Texture-aware quadric edge collapse (MeshLab). UV seams are preserved so the texture "
+                 "still lands in the same places; the target is 20k triangles.")
             mesh = _load(work / "decimated.obj")
 
         # ---- 3: orient ----
         current = "Orient"
         step("Orient", "working")
-        step("Orient", "done", _orient(mesh))
+        full = _orient(mesh)
+        short = " · ".join(p for p in full.split(" · ") if not p.startswith(("Z-up", "base on")))
+        step("Orient", "done", short.replace("levelled", "Levelled").replace("kept", "Kept"),
+             full + ". glTF is Y-up; the USD stage is Z-up, so the mesh is rotated, its box faces aligned "
+             "to X/Y with the long side on X, and its base moved to the ground plane.")
 
         # ---- 4: scale ----
-        current = "Scale to tape size"
+        current = "Scale to real size"
         cur = mesh.extents.copy()
         target, src, why = _target_dims(a, assets, cur)
         s = target / cur
@@ -172,27 +182,27 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
         a.dims_source = src
         before = " × ".join(f"{v:.2f}" for v in cur)
         after = " × ".join(f"{v * 100:.1f}" for v in target)
-        step("Scale to tape size", "done" if src == "tape" else "working",
+        tag = "tape" if src == "tape" else why.split("common ")[-1].replace(" carton", "").replace(" (sized near your measured boxes)", "")
+        step("Scale to real size", "done",
+             f"{after} cm · " + ("tape" if src == "tape" else f"≈ {tag}"),
              f"{before} units → {after} cm · {why}")
-        if src != "tape":
-            steps["Scale to tape size"].status = "done"
-            steps["Scale to tape size"].detail += " · enter a tape size for true scale"
-            changed(a)
 
         # ---- 5: collider ----
         current = "Collider"
         hull = mesh.convex_hull
-        step("Collider", "done",
-             f"Convex hull · {len(hull.faces)} tris · {hull.volume * 1000:.1f} L · PhysX cooks the same hull")
+        step("Collider", "done", f"Convex hull · {len(hull.faces)} tris · {hull.volume * 1000:.1f} L",
+             "UsdPhysics MeshCollisionAPI with approximation=convexHull. PhysX cooks the same hull at load, "
+             "so the collision shape matches what is reported here.")
 
         # ---- 6: physics + label ----
         current = "Physics + label"
         L, W, H = target
         area = 2 * (L * W + L * H + W * H)
         mass = area * CARDBOARD_GSM / 1000
-        step("Physics + label", "done",
-             f"Rigid body · {mass:.2f} kg ({area:.2f} m² × {CARDBOARD_GSM} g/m²) · "
-             f"friction {FRICTION[0]}/{FRICTION[1]} · class '{LABEL}'")
+        step("Physics + label", "done", f"{mass:.2f} kg · friction {FRICTION[0]} · '{LABEL}'",
+             f"Rigid body. Mass = surface {area:.2f} m² × {CARDBOARD_GSM} g/m² corrugated cardboard "
+             f"(an empty box). Physics material: static friction {FRICTION[0]}, dynamic {FRICTION[1]}. "
+             f"Semantic class label '{LABEL}' (UsdSemantics LabelsAPI + legacy Semantics attrs).")
 
         # ---- 7: write USD (+ viewer GLB) ----
         current = "Write USD"
@@ -227,20 +237,21 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
         a.clean_mesh = f"assets/{a.id}/{a.id}_view.glb"
         a.clean_tris = int(len(mesh.faces))
         size = sum(p.stat().st_size for p in out_dir.iterdir() if p.suffix in (".usda", ".png")) / 1e6
-        step("Write USD", "done", f"{usd.name} · {_fmt(len(mesh.faces))} tris · "
-                                  f"{'texture ' + str(img.size[0]) + 'px' if texture else 'flat cardboard colour'} · "
-                                  f"{size:.1f} MB")
+        step("Write USD", "done", f"{usd.name} · {size:.1f} MB",
+             f"{usd.name} · {_fmt(len(mesh.faces))} tris · "
+             f"{'texture ' + str(img.size[0]) + 'px' if texture else 'flat cardboard colour'} · {size:.1f} MB · "
+             "Z-up, meters, kg; defaultPrim set; UsdPreviewSurface material")
 
         # ---- 8: validate the file on disk ----
         current = "Validate"
         step("Validate", "working", "Opening the written file")
         a.checks = validate(usd)
         # The file can't know where its size came from; the pipeline does.
+        # Informational, never a warning: a best guess is a valid answer.
         a.checks.append(Check(
-            rule="scale_source", label="Tape-measured size",
-            status="pass" if a.dims_source == "tape" else "warn",
-            detail="From tape measurement" if a.dims_source == "tape"
-            else ("Matched to measured boxes" if a.dims_source == "inferred" else "Estimated · enter L×W×H"),
+            rule="scale_source", label="Size source",
+            status="pass",
+            detail="Tape measurement" if a.dims_source == "tape" else "Best guess from proportions",
         ))
         n_pass = sum(c.status == "pass" for c in a.checks)
         bad = [c for c in a.checks if c.status in ("warn", "fail")]

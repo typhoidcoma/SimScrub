@@ -414,3 +414,121 @@ img { max-width: 100%; display: block; }
   background: var(--panel-2); border: 1px solid var(--orange); border-radius: 6px; padding: 4px 10px;
 }
 .project-name-input:focus { outline: none; }
+
+/* =========================================================
+   Density pass: fit a 1440×900 laptop screen where possible
+   ========================================================= */
+.shell { margin: 12px auto; }
+.hdr { padding: 12px 22px; }
+.brand-bar { height: 30px; }
+.brand-name { font-size: 15px; }
+.brand-sub { margin-top: 4px; }
+.tab { padding: 11px 12px 9px; }
+.body { padding: 14px 22px 16px; gap: 12px; }
+.ftr { padding: 9px 22px; }
+
+/* hero: title + summary on one line, Next on the right */
+.hero { align-items: center; }
+.hero-main { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; min-width: 0; }
+.hero h1, .project-name { margin: 0; font-size: 22px; }
+.project-name { display: flex; width: fit-content; }
+.project-name-input { margin: 0; font-size: 22px; width: min(480px, 100%); }
+.hero .sub { font-size: 13px; }
+.hero .btn { padding: 9px 14px; font-size: 12px; }
+
+/* panels */
+.panel { padding: 14px 16px; gap: 10px; }
+.tab-body .panel { min-height: 0; }
+.cost { padding: 8px 12px; }
+.cost-item b { font-size: 14px; }
+.note { font-size: 12px; padding: 2px 0 2px 10px; }
+
+/* process monitor: one line */
+.monitor { padding: 9px 14px; gap: 8px; }
+.monitor-row { display: flex; align-items: center; gap: 14px; }
+.monitor-row .segs { flex: 1; min-width: 120px; }
+.monitor-status { white-space: nowrap; }
+
+/* segment: frame scales to the screen height, centred */
+.frame-view { width: min(100%, calc((100vh - 400px) * var(--ar, 1.78))); margin-inline: auto; }
+.strip { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
+.strip-img { height: 76px; }
+.strip-meta { padding: 5px 8px; }
+
+/* reconstruct: four across on a laptop screen */
+.cards { grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.viewer { aspect-ratio: 16 / 10; }
+.card .meta { padding: 10px 12px 12px; gap: 6px; }
+.steps { gap: 4px; }
+.step { font-size: 12px; }
+.step-detail { font-size: 10.5px; line-height: 1.35; }
+
+/* simready: two-up, viewer + tape left, steps right, checks underneath */
+.sr-grid { grid-template-columns: repeat(auto-fill, minmax(600px, 1fr)); gap: 12px; }
+.sr-card {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  column-gap: 14px; row-gap: 8px; align-content: start; padding: 12px;
+}
+.sr-card > .row { grid-column: 1 / -1; }
+.sr-card > .sr-view { grid-column: 1; grid-row: 2; aspect-ratio: 4 / 3; }
+.sr-card > .tape { grid-column: 1; grid-row: 3; }
+.sr-card > .steps { grid-column: 2; grid-row: 2 / span 2; align-content: start; margin: 0; }
+.sr-card > .sr-checks {
+  grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 12px; padding-top: 8px;
+}
+.sr-checks .check-row { font-size: 11.5px; }
+.sr-checks .check-row .d { max-width: none; }
+@media (max-width: 1300px) { .sr-grid { grid-template-columns: 1fr; } }
+
+/* stage: thumbnail left, numbers + launch right */
+.tab-body #p-stage {
+  max-width: none; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  column-gap: 18px; row-gap: 10px; align-content: start;
+}
+#p-stage > .panel-hd { grid-column: 1 / -1; }
+#p-stage > .stage-thumb { grid-column: 1; grid-row: 2 / span 4; aspect-ratio: 16 / 9; }
+#p-stage > :not(.panel-hd):not(.stage-thumb) { grid-column: 2; }
+@media (max-width: 900px) {
+  .tab-body #p-stage { grid-template-columns: 1fr; }
+  #p-stage > .stage-thumb, #p-stage > :not(.panel-hd):not(.stage-thumb) { grid-column: 1; grid-row: auto; }
+  .sr-card { grid-template-columns: 1fr; }
+  .sr-card > * { grid-column: 1 !important; grid-row: auto !important; }
+  .sr-card > .sr-checks { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---------- density pass 2 ---------- */
+.frame-view { width: min(100%, calc((100vh - 470px) * var(--ar, 1.78))); }
+.step.has-more { cursor: help; }
+.step-more { grid-column: 2; font-size: 11.5px; line-height: 1.45; color: var(--text-2); margin-bottom: 4px; }
+.inspector-steps { max-height: 34vh; overflow: auto; border-top: 1px solid var(--line); padding-top: 10px; }
+.inspector-steps .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; row-gap: 8px; }
+.sr-card > .tape { align-self: end; }
+.sr-card > .sr-view { aspect-ratio: 4 / 3; }
+.sr-card { row-gap: 6px; }
+.sr-card > .sr-checks { padding-top: 6px; gap: 3px 12px; }
+
+/* ---------- density pass 3 ---------- */
+.frame-view { width: min(100%, calc((100vh - 480px) * var(--ar, 1.78))); }
+.sr-card .step { grid-template-columns: 10px 112px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.sr-card .step-detail { grid-column: 3; }
+.sr-card > .steps { gap: 5px; align-self: center; }
+.sr-checks-summary { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+  border-top: 1px solid var(--line); padding-top: 8px; }
+.sr-checks { position: relative; }
+.sr-hide { position: absolute; right: 0; bottom: 0; }
+.cost-note { align-self: center; max-width: 520px; font-size: 11.5px; line-height: 1.4; color: var(--muted); padding-left: 6px; }
+@media (max-width: 1200px) { .cost-note { display: none; } }
+
+/* ---------- simready: four across, stacked like Reconstruct ---------- */
+.sr-grid { grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.sr-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.sr-card > .sr-view { aspect-ratio: 16 / 10; }
+.sr-card .step { grid-template-columns: 10px minmax(0, 1fr); align-items: baseline; row-gap: 1px; }
+.sr-card .step-detail { grid-column: 2; }
+.sr-card > .steps { gap: 4px; align-self: stretch; }
+.tape { grid-template-columns: auto 1fr; display: grid; align-items: center; column-gap: 10px; }
+.tape > .label { white-space: nowrap; }
+.tape-row .input { padding: 6px 6px; }
+.sr-checks { grid-template-columns: 1fr 1fr; display: grid; gap: 3px 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+.sr-checks-summary { padding-top: 6px; }

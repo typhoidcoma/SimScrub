@@ -11,6 +11,7 @@ export interface Step {
   name: string;
   status: "waiting" | "working" | "done" | "skipped" | "failed";
   detail: string;
+  more?: string;
 }
 
 export interface Recon {

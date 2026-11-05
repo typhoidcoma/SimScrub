@@ -19,6 +19,8 @@ for (const [i, t] of tabs.entries()) {
   await page.getByRole("button", { name: new RegExp(`0${i + 1} ${t}`, "i") }).click();
   await page.waitForTimeout(t === "Reconstruct" || t === "SimReady" ? 9000 : 700);
   await page.screenshot({ path: `${out}/tab_${i + 1}_${t.toLowerCase()}.png`, fullPage: true });
+  const h = await page.evaluate(() => document.documentElement.scrollHeight);
+  console.log(`${t.padEnd(12)} page height ${h}px ${h <= height ? "fits" : `scrolls ${h - height}px`}`);
 
   if (t === "Reconstruct" || t === "SimReady") {
     const mv = page.locator("section:visible model-viewer").first();

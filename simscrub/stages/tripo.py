@@ -25,6 +25,9 @@ SETTINGS = {
     "texture": True,
     "pbr": False,
     "texture_quality": "standard",
+    # Cap what comes back. Uncapped, Tripo returns ~1.4M tris (~41 MB) per box,
+    # and SimReady decimates to 20k anyway. 500k keeps detail for the raw view.
+    "face_limit": 500_000,
 }
 CREDITS_PER_MODEL = 30  # image-to-3D, standard texture (developers.tripo3d.ai/en/pricing)
 

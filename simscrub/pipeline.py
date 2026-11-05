@@ -157,7 +157,7 @@ def run_simready(job: Job, job_dir: Path, update: Update) -> None:
 
     failed = [a for a in todo if any(s.status == "failed" for s in a.prep)]
     flagged = [a for a in todo if any(c.status in ("warn", "fail") for c in a.checks)
-               or a.dims_source != "tape" or a.recon.status == "proxy"]
+               or a.recon.status == "proxy"]
     msg = f"{len(todo) - len(failed)}/{len(todo)} assets SimReady"
     if flagged:
         msg += f" · {len(flagged)} need a look"

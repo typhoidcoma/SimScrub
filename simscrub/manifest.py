@@ -45,7 +45,8 @@ class Step(BaseModel):
 
     name: str
     status: Literal["waiting", "working", "done", "skipped", "failed"] = "waiting"
-    detail: str = ""
+    detail: str = ""   # one-line result, always visible
+    more: str = ""     # full explanation: tooltip + inspector
 
 
 class Recon(BaseModel):

@@ -80,21 +80,20 @@ export function ProcessMonitor({ job, showLog, onToggleLog }: { job: Job | null;
   const current = job ? STAGES.findIndex((s) => job.stages[s].status === "working") : -1;
   return (
     <div className="monitor">
-      <div className="row">
-        <span className="label"><span className="n">06</span> / Process Monitor</span>
-        <span className="spacer" />
-        <button className="tag" onClick={onToggleLog}>{showLog ? "Hide log" : "Show log"}</button>
-        <span className="label">
+      <div className="monitor-row">
+        <span className="label"><span className="n">06</span> / Process</span>
+        <div className="segs">
+          {Array.from({ length: SEGS }, (_, i) => (
+            <div key={i} className={`seg ${i < lit ? "on" : ""} ${working && i === lit ? "head" : ""}`} />
+          ))}
+        </div>
+        <span className="label monitor-status">
           {current >= 0
             ? `Running 0${current + 1} / 05`
-            : `${job ? STAGES.filter((s) => ["done", "attention"].includes(job.stages[s].status)).length : 0} / 5 stages done`}{" "}
+            : `${job ? STAGES.filter((s) => ["done", "attention"].includes(job.stages[s].status)).length : 0} / 5 done`}{" "}
           · {Math.round(total * 100)}%
         </span>
-      </div>
-      <div className="segs">
-        {Array.from({ length: SEGS }, (_, i) => (
-          <div key={i} className={`seg ${i < lit ? "on" : ""} ${working && i === lit ? "head" : ""}`} />
-        ))}
+        <button className="tag" onClick={onToggleLog}>{showLog ? "Hide log" : "Log"}</button>
       </div>
       {showLog && (
         <div className="log">

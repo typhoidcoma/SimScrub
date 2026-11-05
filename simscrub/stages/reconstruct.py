@@ -30,10 +30,10 @@ Changed = Callable[[Asset], None]
 
 
 def cache_key(crop: Path) -> str:
-    """Same crop + same settings = same mesh, so never pay twice."""
-    h = hashlib.sha256(crop.read_bytes())
-    h.update(json.dumps(tripo.SETTINGS, sort_keys=True).encode())
-    return h.hexdigest()[:24]
+    """Same crop = same mesh, so never pay twice. The settings it was generated
+    with are recorded in the meta file and shown on the card, so changing a
+    setting never silently re-buys meshes you already have."""
+    return hashlib.sha256(crop.read_bytes()).hexdigest()[:24]
 
 
 def cached(crop: Path) -> Path | None:
@@ -142,7 +142,8 @@ def _generate(client: tripo.Tripo, a: Asset, job_dir: Path, changed: Changed) ->
             step(dl, "working", "Downloading GLB")
             CACHE.mkdir(parents=True, exist_ok=True)
             hit = client.download(d["output"]["model_url"], CACHE / f"{key}.glb")
-            meta = {"credits": credits, "seconds": seconds, "task_id": task_id, **mesh_stats(hit)}
+            meta = {"credits": credits, "seconds": seconds, "task_id": task_id,
+                    "settings": tripo.SETTINGS, **mesh_stats(hit)}
             _meta_path(key).write_text(json.dumps(meta))
             step(dl, "done", f"{meta['size_mb']} MB")
 
