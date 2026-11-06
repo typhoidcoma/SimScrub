@@ -92,6 +92,7 @@ class Asset(BaseModel):
     usd: str | None = None                            # job-relative SimReady .usda
     clean_mesh: str | None = None                     # job-relative GLB of the cleaned mesh, for the viewer
     clean_tris: int | None = None
+    spec: dict | None = None                          # official SimReady validation summary
 
 
 class Capture(BaseModel):

@@ -16,7 +16,7 @@ python -m venv .venv
 cd ui && npm install && npm run dev
 ```
 
-Open http://localhost:5173, drop a walkthrough video into **01 Capture** (or pick one sitting in the project folder) and press **Process**.
+Open http://localhost:5173, drop a walkthrough video into **01 Capture** (or pick one sitting in the project folder), check it in the built-in preview (duration, resolution, codec), and press **Process**.
 
 Headless:
 
@@ -50,6 +50,33 @@ Tripo needs `TRIPO_API_KEY=...` in `.env` (git-ignored) and API credits, which a
 - **SimReady** runs eight visible steps per asset: repair, decimate (~1.4M → 20k tris, UVs kept), orient (Z-up, levelled, base on z=0), scale to tape size, convex-hull collider, physics + `amazon_box` label, write USD, validate. MeshLab work runs in an isolated child process so a native crash can't take the server down.
 - **Validator** is a rule registry (`simscrub/usd/validate.py`): meters, Z-up, default prim, real-world size, collider, rigid body + mass, material/texture, semantic label, plus whether the size came from a tape measurement.
 
+## SimReady standard (NVIDIA SimReady Foundation)
+
+Every box is written as a **[SimReady](https://nvidia.github.io/simready-foundation/latest/guides/getting_started.html) asset, profile Robotics-Prop 4.0.0**, and checked with NVIDIA's own validator (`simready-validate`) as SimReady step 9. All four boxes pass 9/9 required features. The result is stamped into each USD's `SimReady_Metadata.validation`.
+
+```
+assets/cardboard_box_01/simready_usd/
+  cardboard_box_01.usda                     main file (NP.005 layout)
+  textures/cardboard_box_01_albedo.png
+  .thumbs/256x256/cardboard_box_01.usda.png  thumbnail (SR.002)
+  .simready/validation.json                  validator report
+```
+
+- Root `Xform`, `kind=component`, `assetInfo` (identifier, name, version); Z-up, meters, kg.
+- `Geometry/<name>`: rigid body + mass, Wikidata labels `wikidata_class=["cardboard box"]`, `wikidata_qcode=["Q1395006"]`; mesh with faceVarying normals, displayColor, convex-hull collider.
+- `VisualMaterials` (UsdPreviewSurface, sRGB texture) and `PhysicsMaterials` (friction, restitution), both labelled corrugated fiberboard `Q7463524`; `Grasp` guide line.
+- `customLayerData.SimReady_Metadata`: author, asset_name, asset_type, asset_license, category, source_file, usd_date_generated, qcode, rigid_body_count, asset_extents, mass. Pipeline provenance (source video, reconstruction, sizing) sits separately under `SimScrub`.
+
+The validator needs Python 3.12 and a clone of the SimReady Foundation repo:
+
+```bat
+git clone https://github.com/NVIDIA/simready-foundation %USERPROFILE%\.simscrub\simready-foundation
+py -3.12 -m venv %USERPROFILE%\.simscrub\simready-venv
+cd %USERPROFILE%\.simscrub\simready-foundation && %USERPROFILE%\.simscrub\simready-venv\Scripts\pip install -r requirements.txt
+```
+
+Thumbnails are rendered headless with the same 3D viewer the app uses (`ui/scripts/thumbnail.mjs`).
+
 ## Stage and Isaac Sim
 
 - **Assemble** builds `jobs/<job>/stage.usda`: every SimReady asset as a USD *reference* (re-running SimReady updates the stage), a floor collider, a PhysicsScene with gravity, and lights. Placement is estimated from the hero frame (phone assumed at 1.3 m, tilted 20° down); a box seen sitting on another is stacked. Boxes spawn 2 cm above their support and settle under gravity. Eight stage checks run on the written file.
@@ -77,7 +104,8 @@ Launching Isaac Sim from the app accepts the NVIDIA Omniverse EULA (`OMNI_KIT_AC
 | `simscrub/stages/meshops.py` | MeshLab repair + decimate, each in an isolated child process |
 | `simscrub/stages/simready.py` | The eight SimReady steps |
 | `simscrub/usd/author.py` | Writes one SimReady box asset as USD |
-| `simscrub/usd/validate.py` | Rule-registry validator |
+| `simscrub/usd/validate.py` | Rule-registry validator (fast first pass) |
+| `simscrub/usd/nvidia_validate.py` | Runs NVIDIA's `simready-validate` and summarises it for the UI |
 | `simscrub/sizing.py` | Best-guess real size from proportions (common carton sizes) |
 | `simscrub/stages/assemble.py` | Stage assembly: placement, stacking, floor, physics, stage checks, preview |
 | `isaac/settle.py` | Headless Isaac Sim physics settle test |

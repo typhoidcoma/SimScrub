@@ -41,11 +41,21 @@ for _ in range(30):
 stage = ctx.get_stage()
 
 
+def _body(box):
+    """The prim PhysX actually moves: the rigid body below the asset's reference root."""
+    from pxr import UsdPhysics
+
+    for q in Usd.PrimRange(box):
+        if q.HasAPI(UsdPhysics.RigidBodyAPI):
+            return q
+    return box
+
+
 def poses() -> dict:
     out = {}
     root = stage.GetPrimAtPath("/World/Boxes")
     for p in root.GetChildren():
-        m = UsdGeom.Xformable(p).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        m = UsdGeom.Xformable(_body(p)).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
         t = m.ExtractTranslation()
         r = m.ExtractRotation()
         out[p.GetName()] = {"pos": [t[0], t[1], t[2]], "tilt_deg": _tilt(r)}

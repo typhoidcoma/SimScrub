@@ -2,13 +2,112 @@ import type React from "react";
 import { useContext, useEffect, useRef, useState } from "react";
 import { TabVisible } from "./tabVisible";
 import { Panel, StatusDot } from "./components";
-import type { Asset, Dims, Job, Step } from "./types";
+import type { Asset, Dims, Job, SpecFeature, Step } from "./types";
 import { fileUrl } from "./types";
 
 const cm = (d: Dims) => `${d.l.toFixed(0)}×${d.w.toFixed(0)}×${d.h.toFixed(0)}`;
 
 /* ---------------- 01 CAPTURE ---------------- */
 export type Source = { file: File } | { path: string } | null;
+
+interface VideoInfo {
+  name: string;
+  size_mb: number | null;
+  duration_s: number | null;
+  fps: number | null;
+  width: number;
+  height: number;
+  codec: string | null;
+  browser_may_not_play?: boolean;
+}
+
+/** Play the chosen clip so the artist can confirm it's the right one before processing. */
+function VideoPreview({ source, job }: { source: Source; job: Job | null }) {
+  const hasJobVideo = !!job?.capture.video;
+  const [info, setInfo] = useState<VideoInfo | null>(null);
+  const [cantPlay, setCantPlay] = useState(false);
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+
+  // A dropped file plays straight from disk; nothing is uploaded until Process.
+  useEffect(() => {
+    if (!source || !("file" in source)) { setObjectUrl(null); return; }
+    const u = URL.createObjectURL(source.file);
+    setObjectUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [source]);
+
+  const base = source
+    ? ("path" in source ? `/api/videos/${encodeURIComponent(source.path)}` : null)
+    : hasJobVideo ? "/api/job/video" : null;
+  const src = objectUrl ?? (base ? `${base}/file` : null);
+  const poster = base ? `${base}/poster` : undefined;
+  const key = src ?? "none";
+
+  useEffect(() => {
+    setCantPlay(false);
+    if (source && "file" in source) {
+      setInfo({ name: source.file.name, size_mb: +(source.file.size / 1e6).toFixed(1), duration_s: null, fps: null,
+        width: 0, height: 0, codec: null });
+      return;
+    }
+    if (!base) { setInfo(null); return; }
+    let live = true;
+    fetch(`${base}/info`).then((r) => (r.ok ? r.json() : null)).then((i) => live && setInfo(i)).catch(() => {});
+    return () => { live = false; };
+  }, [base, source]);
+
+  if (!src) {
+    return (
+      <div className="video-preview empty">
+        <span className="label dim">Your walkthrough plays here, so you can check it's the right clip</span>
+      </div>
+    );
+  }
+  const facts = [
+    info?.duration_s ? `${info.duration_s.toFixed(1)} s` : null,
+    info?.width ? `${info.width}×${info.height}` : null,
+    info?.fps ? `${info.fps} fps` : null,
+    info?.codec ? info.codec.toUpperCase() : null,
+    info?.size_mb ? `${info.size_mb} MB` : null,
+  ].filter(Boolean);
+
+  return (
+    <div className="video-preview">
+      <div className="video-frame">
+        {cantPlay && poster ? (
+          <img src={poster} alt="Frame from the video" />
+        ) : (
+          <video
+            key={key}
+            src={src}
+            poster={poster}
+            controls
+            muted
+            playsInline
+            preload="metadata"
+            onError={() => setCantPlay(true)}
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              if (!v.videoWidth) setCantPlay(true);   // audio decoded but no picture (e.g. HEVC)
+              setInfo((i) => i && !i.width ? { ...i, duration_s: +v.duration.toFixed(1), width: v.videoWidth, height: v.videoHeight } : i);
+            }}
+          />
+        )}
+        {cantPlay && (
+          <div className="video-note">
+            {poster
+              ? "This browser can't play this codec, so here's a frame from it instead. The pipeline reads it fine."
+              : "This browser can't preview this codec. The pipeline can still read it; press Process."}
+          </div>
+        )}
+      </div>
+      <div className="video-facts">
+        <strong title={info?.name}>{info?.name ?? ("path" in (source ?? {}) ? (source as { path: string }).path : job?.capture.video)}</strong>
+        <span className="label dim">{facts.join(" · ")}</span>
+      </div>
+    </div>
+  );
+}
 
 export function CapturePanel({
   job, busy, onProcess,
@@ -25,70 +124,74 @@ export function CapturePanel({
 
   const pickedName = source ? ("file" in source ? source.file.name : source.path) : null;
   const running = st?.status === "working";
-  const shownName = running ? job?.capture.video ?? pickedName : pickedName ?? job?.capture.video ?? null;
   const info = job?.capture;
+  const isNew = !!pickedName && pickedName !== job?.capture.video;
 
   return (
     <Panel id="p-capture" n={1} title="Capture" state={st}>
-      <div className="field">
-        <span className="label dim">Office walkthrough</span>
-        <div
-          className={`drop ${shownName ? "has" : ""} ${over ? "over" : ""}`}
-          onClick={() => !busy && fileRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setOver(true); }}
-          onDragLeave={() => setOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setOver(false);
-            const f = e.dataTransfer.files[0];
-            if (f) setSource({ file: f });
-          }}
-          role="button"
-          tabIndex={0}
-        >
-          {shownName ? (
-            <>
-              <StatusDot s={running ? "working" : pickedName ? "queued" : st?.status ?? "idle"} text="" />
-              <div>
-                <strong>{shownName}</strong>
-                <div className="label dim" style={{ marginTop: 4 }}>
-                  {pickedName && !running && pickedName !== job?.capture.video
-                    ? "Ready · press Process"
-                    : `${info?.frames_extracted ?? 0} frames${info?.duration ? ` · ${info.duration.toFixed(1)}s` : ""}`}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div>
-              <strong>Drop your walkthrough video</strong>
+      <div className="capture-grid">
+        <VideoPreview source={source} job={job} />
+
+        <div className="capture-side">
+          <div className="field">
+            <span className="label dim">Office walkthrough</span>
+            <div
+              className={`drop ${over ? "over" : ""}`}
+              onClick={() => !busy && fileRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+              onDragLeave={() => setOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setOver(false);
+                const f = e.dataTransfer.files[0];
+                if (f) setSource({ file: f });
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              <strong>{pickedName ? "Drop a different video" : "Drop your walkthrough video"}</strong>
               <div className="label dim" style={{ marginTop: 6 }}>or click to browse · MP4 · MOV</div>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="video/*"
+                hidden
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) setSource({ file: f }); }}
+              />
             </div>
-          )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="video/*"
-            hidden
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) setSource({ file: f }); }}
-          />
-        </div>
-        {videos.length > 0 && (
-          <div className="row">
-            <span className="label dim">In project folder</span>
-            {videos.map((v) => (
-              <button key={v} className="tag" disabled={busy} onClick={() => setSource({ path: v })}>{v}</button>
-            ))}
+            {videos.length > 0 && (
+              <div className="row">
+                <span className="label dim">In project folder</span>
+                {videos.map((v) => (
+                  <button key={v} className={`tag ${source && "path" in source && source.path === v ? "on" : ""}`}
+                    disabled={busy} onClick={() => setSource({ path: v })}>{v}</button>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      <div className="note">
-        Tape-measure 2–3 boxes before you film. You'll enter each box's size in SimReady, next to its mesh.
-      </div>
+          <div className="capture-status">
+            <StatusDot
+              s={running ? "working" : isNew ? "queued" : st?.status ?? "idle"}
+              text={running ? "Extracting frames…" : isNew ? "New video · press Process" : info?.video ? "Processed" : "No video yet"}
+            />
+            {info?.video && !isNew && (
+              <span className="label dim">
+                {info.frames_extracted} frames sampled{info.duration ? ` from ${info.duration.toFixed(1)} s` : ""}
+              </span>
+            )}
+          </div>
 
-      <button className="btn btn-primary btn-wide" disabled={busy || !source} onClick={() => onProcess(source)}>
-        {busy ? "Processing…" : "Process"}
-      </button>
+          <div className="note">
+            One slow pass around the room, boxes in view. They're found automatically; sizes are a best guess you
+            can override in SimReady.
+          </div>
+
+          <button className="btn btn-primary btn-wide" disabled={busy || !source} onClick={() => onProcess(source)}>
+            {busy ? "Processing…" : isNew ? "Process this video" : "Process"}
+          </button>
+        </div>
+      </div>
     </Panel>
   );
 }
@@ -459,10 +562,89 @@ function TapeInputs({ a, disabled }: { a: Asset; disabled: boolean }) {
   );
 }
 
+/* ---------- spec: what standard an asset meets, always on screen ---------- */
+export function SpecBadge({ spec, compact = false }: { spec: Asset["spec"]; compact?: boolean }) {
+  if (!spec || spec.state === "unavailable" || spec.state === "error") {
+    return <span className="spec-badge none" title="Not checked against the SimReady spec yet">SimReady · not checked</span>;
+  }
+  const ok = spec.state === "pass";
+  return (
+    <span
+      className={`spec-badge ${ok ? "pass" : "fail"}`}
+      title={`${spec.standard} · profile ${spec.profile} v${spec.version} · checked by ${spec.validator} on ${spec.date}`}
+    >
+      {ok ? "✓" : "✕"} SimReady{compact ? "" : ` · ${spec.profile} ${spec.version}`}
+    </span>
+  );
+}
+
+function SpecSheet({ job, a }: { job: Job; a: Asset }) {
+  const thumb = a.thumb && a.thumb.includes(".thumbs") ? fileUrl(job, a.thumb) : undefined;
+  const usdName = a.usd?.split("/").pop();
+  const mass = a.prep.find((s) => s.name === "Physics + label")?.detail.split(" kg")[0];
+  const rows: [string, string, string][] = [
+    ["Asset", usdName?.replace(/\.usda?$/, "") ?? "—", `${usdName} · kind=component · prop`],
+    ["Class", "box · Q1395006", "wikidata_class 'cardboard box', wikidata_qcode Q1395006"],
+    ["Material", "fiberboard · Q7463524", "corrugated fiberboard (Wikidata Q7463524)"],
+    ["Size", a.dims ? `${a.dims.l.toFixed(1)}×${a.dims.w.toFixed(1)}×${a.dims.h.toFixed(1)} cm` : "—",
+      a.dims_source === "tape" ? "From tape measurement" : "Best guess: proportions matched to a common carton size"],
+    ["Mass", mass ? `${mass} kg` : "—", "Rigid body, cardboard surface area × 550 g/m²"],
+  ];
+  return (
+    <div className="spec-sheet">
+      {thumb && <img className="spec-thumb" src={thumb} alt={`${usdName} thumbnail`} title=".thumbs/256x256 (SR.002)" />}
+      <dl className="spec-rows">
+        {rows.map(([k, v, hint]) => (
+          <div key={k} title={hint}><dt className="label dim">{k}</dt><dd>{v}</dd></div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function SpecDetail({ a }: { a: Asset }) {
+  const spec = a.spec;
+  if (!spec?.features) return null;
+  const req = spec.features.filter((f) => f.required);
+  const opt = spec.features.filter((f) => !f.required && f.status === "pass");
+  const na = spec.features.filter((f) => !f.required && f.status !== "pass");
+  const Row = ({ f }: { f: SpecFeature }) => (
+    <div className={`feat ${f.status}`} title={[...f.failing, ...f.unmet_optional].join(", ") || f.id}>
+      <span className={`dot ${f.status === "pass" ? "pass" : f.status === "fail" ? "fail" : "idle"}`} />
+      <span className="feat-name">{f.name}</span>
+      <span className="feat-id">{f.id} v{f.version}</span>
+      {f.failing.length > 0 && <span className="feat-fail">{f.failing.join(", ")}</span>}
+    </div>
+  );
+  return (
+    <div className="spec-detail">
+      <div className="row">
+        <SpecBadge spec={spec} />
+        <span className="label dim">{spec.standard} · {spec.validator} · {spec.date}{spec.stamped ? " · stamped into the USD" : ""}</span>
+      </div>
+      <div className="feat-cols">
+        <div>
+          <span className="label dim">Required · {spec.required_passed}/{spec.required_total}</span>
+          {req.map((f) => <Row key={f.id} f={f} />)}
+        </div>
+        <div>
+          <span className="label dim">Optional met · {opt.length}</span>
+          {opt.map((f) => <Row key={f.id} f={f} />)}
+          <span className="label dim" style={{ marginTop: 8 }}>Optional, not used by a single rigid prop · {na.length}</span>
+          <div className="feat-na">{na.map((f) => f.name).join(" · ")}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SimReadyCard({ job, a, busy, onOpen }: { job: Job; a: Asset; busy: boolean; onOpen: () => void }) {
   const [view, setView] = useState<"clean" | "raw">("clean");
   const [showChecks, setShowChecks] = useState(false);
+  const [showSteps, setShowSteps] = useState(false);
   const allPass = a.checks.length > 0 && a.checks.every((c) => c.status === "pass");
+  // While SimReady runs, the steps are the story; once done, the spec sheet is.
+  const done = !!a.usd && a.prep.length > 0 && a.prep.every((p) => p.status !== "working" && p.status !== "waiting");
   const raw = a.recon.mesh ? `${fileUrl(job, a.recon.mesh)}?v=${a.recon.tris ?? 0}` : undefined;
   const clean = a.clean_mesh ? `${fileUrl(job, a.clean_mesh)}?v=${a.clean_tris ?? 0}-${a.dims?.l ?? 0}` : undefined;
   const shown = view === "clean" ? clean : raw;
@@ -474,12 +656,7 @@ function SimReadyCard({ job, a, busy, onOpen }: { job: Job; a: Asset; busy: bool
         <span className="label">{a.id}</span>
         {a.recon.status === "proxy" && <span className="tag orange">Proxy</span>}
         <span className="spacer" />
-        <span className="label dim">{a.dims ? `${cm(a.dims)} cm` : ""}</span>
-        {allPass && (
-          <button className="tag" onClick={() => setShowChecks((v) => !v)} title="The 9 validation checks run on the written USD">
-            {showChecks ? "Hide checks" : "Checks"}
-          </button>
-        )}
+        {a.usd ? <SpecBadge spec={a.spec} compact /> : <span className="label dim">{a.dims ? `${cm(a.dims)} cm` : ""}</span>}
       </div>
 
       <div className="sr-view">
@@ -495,9 +672,23 @@ function SimReadyCard({ job, a, busy, onOpen }: { job: Job; a: Asset; busy: bool
         {clean && <button className="tag sr-inspect" onClick={onOpen}>Compare ↗</button>}
       </div>
 
+      {done && <SpecSheet job={job} a={a} />}
+
       <TapeInputs a={a} disabled={busy} />
 
-      {a.prep.length > 0 && <StepList steps={a.prep} />}
+      {a.prep.length > 0 && (
+        <div className="sr-toggles">
+          <button className={`tag ${showSteps ? "on" : ""}`} onClick={() => setShowSteps((v) => !v)}>
+            {showSteps ? "Hide steps" : `Steps · ${a.prep.filter((p) => p.status === "done").length}/${a.prep.length}`}
+          </button>
+          {allPass && (
+            <button className={`tag ${showChecks ? "on" : ""}`} onClick={() => setShowChecks((v) => !v)}>
+              {showChecks ? "Hide checks" : `Checks · ${a.checks.length}/${a.checks.length}`}
+            </button>
+          )}
+        </div>
+      )}
+      {a.prep.length > 0 && (showSteps || !done) && <StepList steps={a.prep} />}
 
       {a.checks.length > 0 && (allPass && !showChecks ? null : (
         <div className="sr-checks">
@@ -539,6 +730,7 @@ function CompareInspector({ job, a, onClose }: { job: Job; a: Asset; onClose: ()
             <div className="inspector-view">{a.clean_mesh && <MeshView src={fileUrl(job, a.clean_mesh)!} auto={false} />}</div>
           </div>
         </div>
+        <SpecDetail a={a} />
         <div className="inspector-steps"><StepList steps={a.prep} full /></div>
         <span className="label dim">USD: jobs/{job.id}/{a.usd}</span>
       </div>
@@ -599,6 +791,8 @@ export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | nul
   const [launchErr, setLaunchErr] = useState<string | null>(null);
   const [showChecks, setShowChecks] = useState(false);
   const allPass = !!info?.checks.length && info.checks.every((c) => c.status === "pass");
+  const placedIds = new Set(info?.layout.map((l) => l.id) ?? []);
+  const placedAssets = job?.assets.filter((a) => placedIds.has(a.id)) ?? [];
 
   useEffect(() => {
     let live = true;
@@ -648,6 +842,18 @@ export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | nul
           </div>
           <div className="dim-tile"><span className="label dim">Mass</span><b>{info?.total_mass_kg ?? "—"}<small>kg</small></b></div>
         </div>
+
+        {placedAssets.length > 0 && (
+          <div className="stage-spec">
+            <span className="label dim">Assets in stage</span>
+            {placedAssets.map((a) => (
+              <div key={a.id} className="stage-spec-row">
+                <span className="mono-sm">{a.usd?.split("/").pop()}</span>
+                <SpecBadge spec={a.spec} compact />
+              </div>
+            ))}
+          </div>
+        )}
 
         <button className="btn btn-primary btn-wide" disabled={busy || !simDone} onClick={onAssemble}>
           {info?.usd ? "Re-assemble stage" : "Assemble stage"}

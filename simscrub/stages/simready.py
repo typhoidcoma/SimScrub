@@ -28,7 +28,10 @@ from simscrub.errors import chip_for
 from simscrub.manifest import Asset, Check, Dims, Step
 from simscrub.sizing import guess_size
 from simscrub.stages import meshops
-from simscrub.usd.author import CARDBOARD_RGB, CARDBOARD_ROUGHNESS, FRICTION, LABEL, BoxAsset, write_box
+from simscrub.usd.author import (
+    CARDBOARD_RGB, CARDBOARD_ROUGHNESS, FRICTION, LABEL, MATERIAL_QCODE, QCODE, BoxAsset, asset_name, write_box,
+)
+from simscrub.usd import nvidia_validate as nv
 from simscrub.usd.validate import validate
 
 Changed = Callable[[Asset], None]
@@ -37,7 +40,7 @@ TARGET_TRIS = 20_000
 CARDBOARD_GSM = 550           # g/m², single-wall corrugated
 
 STEP_NAMES = ["Repair", "Decimate", "Orient", "Scale to real size", "Collider",
-              "Physics + label", "Write USD", "Validate"]
+              "Physics + label", "Write USD", "Validate", "NVIDIA SimReady validation"]
 
 Y_UP_TO_Z_UP = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], float)
 Z_UP_TO_Y_UP = np.linalg.inv(Y_UP_TO_Z_UP)
@@ -88,6 +91,46 @@ def _orient(mesh: trimesh.Trimesh) -> str:
     return f"Z-up · {levelled} · yawed {yaw:+.0f}° · base on z=0"
 
 
+def _outward(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray, int]:
+    """Counter-clockwise, outward-facing triangles (VG.029) and unit faceVarying normals (VG.028).
+
+    UV seams split vertices, so winding and normals are computed on a copy with
+    seams merged, then mapped back face-for-face to the textured mesh.
+    """
+    merged = trimesh.Trimesh(vertices=mesh.vertices.copy(), faces=mesh.faces.copy(), process=False)
+    merged.merge_vertices(merge_tex=True, merge_norm=True)
+    before = merged.face_normals.copy()
+    trimesh.repair.fix_winding(merged)
+    trimesh.repair.fix_inversion(merged)
+    flip = np.einsum("ij,ij->i", before, merged.face_normals) < 0
+    faces = np.asarray(mesh.faces).copy()
+    faces[flip] = faces[flip][:, ::-1]
+    n = merged.vertex_normals[merged.faces].reshape(-1, 3)
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+    return faces, n, int(flip.sum())
+
+
+def _display_rgb(img) -> tuple[float, float, float]:
+    """displayColor fallback (DISP.001): average of the texture, else flat cardboard."""
+    if img is None:
+        return CARDBOARD_RGB
+    a = np.asarray(img.convert("RGB").resize((64, 64))).reshape(-1, 3) / 255.0
+    return tuple(float(v) for v in np.clip(a.mean(0), 0, 1))
+
+
+def _thumbnail(glb: Path, png: Path) -> bool:
+    """Render with the same headless viewer the app uses (ui/scripts/thumbnail.mjs)."""
+    import subprocess
+
+    ui = Path(__file__).resolve().parents[2] / "ui"
+    try:
+        r = subprocess.run(["node", str(ui / "scripts" / "thumbnail.mjs"), str(glb.resolve()), str(png.resolve())],
+                           cwd=str(ui), capture_output=True, text=True, timeout=120, shell=False)
+        return r.returncode == 0 and png.exists()
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def _target_dims(a: Asset, all_assets: list[Asset], cur: np.ndarray) -> tuple[np.ndarray, str, str]:
     """Target size in meters (x=long, y=short, z=height), source, and a sentence."""
     if a.measured:
@@ -106,7 +149,7 @@ def _target_dims(a: Asset, all_assets: list[Asset], cur: np.ndarray) -> tuple[np
     return cur * (g.long_m / cur[0]), "inferred" if centre else "estimated", why
 
 
-def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> None:
+def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed, job=None) -> None:
     steps = {n: Step(name=n) for n in STEP_NAMES}
     a.prep = list(steps.values())
     a.checks = []
@@ -121,8 +164,10 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
     work = job_dir / "work" / a.id
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    out_dir = job_dir / "assets" / a.id
-    shutil.rmtree(out_dir, ignore_errors=True)
+    name = asset_name(a.id)
+    out_dir = job_dir / "assets" / name / "simready_usd"     # NP.005: <root>/<intermediate>/<main>
+    shutil.rmtree(out_dir.parent, ignore_errors=True)
+    shutil.rmtree(job_dir / "assets" / a.id, ignore_errors=True)   # pre-spec folder layout
     out_dir.mkdir(parents=True)
     raw = job_dir / a.recon.mesh
     proxy = a.recon.status == "proxy"
@@ -199,10 +244,11 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
         L, W, H = target
         area = 2 * (L * W + L * H + W * H)
         mass = area * CARDBOARD_GSM / 1000
-        step("Physics + label", "done", f"{mass:.2f} kg · friction {FRICTION[0]} · '{LABEL}'",
+        step("Physics + label", "done", f"{mass:.2f} kg · friction {FRICTION[0]} · {QCODE} cardboard box",
              f"Rigid body. Mass = surface {area:.2f} m² × {CARDBOARD_GSM} g/m² corrugated cardboard "
              f"(an empty box). Physics material: static friction {FRICTION[0]}, dynamic {FRICTION[1]}. "
-             f"Semantic class label '{LABEL}' (UsdSemantics LabelsAPI + legacy Semantics attrs).")
+             f"Semantic labels via UsdSemantics LabelsAPI: wikidata_class 'cardboard box', wikidata_qcode {QCODE}; "
+             f"physics material labelled {MATERIAL_QCODE} (corrugated fiberboard).")
 
         # ---- 7: write USD (+ viewer GLB) ----
         current = "Write USD"
@@ -213,12 +259,25 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
             img = getattr(getattr(mesh.visual, "material", None), "baseColorTexture", None)
         uv = getattr(mesh.visual, "uv", None)
         if img is not None and uv is not None and not proxy:
-            texture = f"{a.id}_albedo.png"
+            texture = f"textures/{name}_albedo.png"
+            (out_dir / "textures").mkdir()
             img.convert("RGB").save(out_dir / texture)
-        usd = out_dir / f"{a.id}.usda"
+        faces, normals, flipped = _outward(mesh)
+        display = _display_rgb(img if texture else None)
+        usd = out_dir / f"{name}.usda"
         write_box(usd, BoxAsset(
-            name=a.id.replace("-", "_"), vertices=np.asarray(mesh.vertices), faces=np.asarray(mesh.faces),
-            uv=np.asarray(uv) if texture else None, texture=texture, mass_kg=mass,
+            name=name, vertices=np.asarray(mesh.vertices), faces=faces, normals=normals,
+            uv=np.asarray(uv) if texture else None, texture=texture, display_rgb=display,
+            mass_kg=mass, dims_m=(float(target[0]), float(target[1]), float(target[2])),
+            meta={
+                "source_file": f"../../../{a.crop}" if a.crop else "",
+                "source_video": (job.capture.video or "") if job else "",
+                "pipeline_id": a.id,
+                "reconstruction": "tripo" if not proxy else "proxy cuboid",
+                "tripo_task_id": a.recon.task_id or "",
+                "size_source": a.dims_source or "",
+                "project_label": LABEL,
+            },
         ))
         view = mesh.copy()
         view.apply_transform(Z_UP_TO_Y_UP)
@@ -232,15 +291,24 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
             roughnessFactor=CARDBOARD_ROUGHNESS,
             doubleSided=True,
         )
-        view.export(out_dir / f"{a.id}_view.glb")
-        a.usd = f"assets/{a.id}/{usd.name}"
-        a.clean_mesh = f"assets/{a.id}/{a.id}_view.glb"
+        viewer_dir = job_dir / "viewer"
+        viewer_dir.mkdir(exist_ok=True)
+        view.export(viewer_dir / f"{name}.glb")
+        a.usd = f"assets/{name}/simready_usd/{usd.name}"
+        a.clean_mesh = f"viewer/{name}.glb"
         a.clean_tris = int(len(mesh.faces))
-        size = sum(p.stat().st_size for p in out_dir.iterdir() if p.suffix in (".usda", ".png")) / 1e6
-        step("Write USD", "done", f"{usd.name} · {size:.1f} MB",
-             f"{usd.name} · {_fmt(len(mesh.faces))} tris · "
-             f"{'texture ' + str(img.size[0]) + 'px' if texture else 'flat cardboard colour'} · {size:.1f} MB · "
-             "Z-up, meters, kg; defaultPrim set; UsdPreviewSurface material")
+        # SR.002: 256x256 thumbnail next to the asset, rendered like the in-app viewer.
+        thumb = out_dir / ".thumbs" / "256x256" / f"{usd.name}.png"
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumbs_ok = _thumbnail(viewer_dir / f"{name}.glb", thumb)
+        a.thumb = f"assets/{name}/simready_usd/.thumbs/256x256/{usd.name}.png" if thumbs_ok else None
+        size = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file()) / 1e6
+        step("Write USD", "done", f"{name}/simready_usd/{usd.name} · {size:.1f} MB",
+             f"SimReady package {name}/simready_usd/: {usd.name} + textures/ + .thumbs/256x256/ · "
+             f"{_fmt(len(mesh.faces))} tris · faceVarying normals ({flipped} faces re-wound to face outward) · "
+             f"{'2048px sRGB texture' if texture else 'flat cardboard colour'} · "
+             f"labels wikidata_class 'cardboard box', wikidata_qcode {QCODE}, material {MATERIAL_QCODE} · "
+             f"SimReady_Metadata provenance block · Z-up, meters, kg")
 
         # ---- 8: validate the file on disk ----
         current = "Validate"
@@ -257,6 +325,27 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
         bad = [c for c in a.checks if c.status in ("warn", "fail")]
         step("Validate", "failed" if any(c.status == "fail" for c in bad) else "done",
              f"{n_pass}/{len(a.checks)} checks pass" + (f" · {len(bad)} need a look" if bad else ""))
+
+        # ---- 9: NVIDIA's official validator, result stamped into the asset ----
+        current = "NVIDIA SimReady validation"
+        step(current, "working", f"simready-validate · {nv.PROFILE} {nv.PROFILE_VERSION}")
+        a.spec = nv.validate(usd, stamp=True)
+        if a.spec["state"] == "unavailable":
+            step(current, "skipped", "Validator not installed",
+                 "Install simready-validate (Python 3.12) to check against NVIDIA's SimReady spec.")
+        elif a.spec["state"] == "error":
+            step(current, "failed", "Validator error", str(a.spec.get("detail")))
+        else:
+            sp = a.spec
+            fails = [f for f in sp["features"] if f["status"] == "fail"]
+            step(current, "done" if sp["state"] == "pass" else "failed",
+                 f"{'PASS' if sp['state'] == 'pass' else 'FAIL'} · {sp['profile']} {sp['version']} · "
+                 f"{sp['required_passed']}/{sp['required_total']} required features",
+                 f"{sp['standard']}, profile {sp['profile']} v{sp['version']}, checked by {sp['validator']}. "
+                 + (f"Failing: " + "; ".join(f"{f['id']} {f['name']}: {', '.join(f['failing'])}" for f in fails)
+                    if fails else "Every required feature passes; result stamped into the asset's "
+                                  "SimReady_Metadata.validation."))
+
         # Intermediate OBJs (hundreds of MB) are only needed for debugging a failure.
         shutil.rmtree(work, ignore_errors=True)
     except Exception as e:  # noqa: BLE001 - show which step failed, in plain words

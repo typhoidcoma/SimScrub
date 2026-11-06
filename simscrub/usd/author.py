@@ -1,78 +1,138 @@
-"""Author one SimReady box asset as USD.
+"""Author one box as a SimReady asset (NVIDIA SimReady Foundation, Robotics-Prop profile).
 
-Layout of each asset file (Z-up, meters, kilograms):
+Folder (NP.002/003/005: lowercase, purpose folders, <root>/<intermediate>/<main containing root name>):
 
-    /BX_01                  Xform, kind=component, RigidBodyAPI, MassAPI
-        /geo                Mesh, CollisionAPI, MeshCollisionAPI(convexHull),
-                            semantic label "amazon_box"
-        /Looks/cardboard    UsdPreviewSurface (+ base colour texture)
-        /Looks/cardboard_physics   UsdPhysics material (friction, restitution)
+    cardboard_box_01/                    asset root
+        simready_usd/                    intermediate folder (NP.005)
+            cardboard_box_01.usda        main file, name contains the root folder name
+            textures/cardboard_box_01_albedo.png
+            .thumbs/256x256/cardboard_box_01.usda.png   (SR.002, written by the pipeline)
+
+Prim layout (mirrors NVIDIA's props_general samples):
+
+    /cardboard_box_01                 Xform  kind=component, assetInfo{identifier, name, version}
+        Geometry/                     Scope
+            cardboard_box_01          Xform  RigidBodyAPI, MassAPI,
+                                             SemanticsLabelsAPI:wikidata_class  ["cardboard box"]
+                                             SemanticsLabelsAPI:wikidata_qcode  ["Q1395006"]
+                mesh                  Mesh   subdivisionScheme=none, faceVarying normals,
+                                             displayColor, CollisionAPI + MeshCollisionAPI(convexHull),
+                                             visual + physics material bindings
+        VisualMaterials/cardboard     Material  UsdPreviewSurface (+ sRGB base colour texture)
+        PhysicsMaterials/cardboard    Material  PhysicsMaterialAPI, SemanticsLabelsAPI:material ["Q7463524"]
+        Grasp/grasp_identifier/...    BasisCurves purpose=guide  (FET_005 grasp line)
+
+Layer metadata: customLayerData.SimReady_Metadata with the provenance and physical
+fields SR.004 asks for (author, asset_name, asset_type, asset_license, category,
+source_file, usd_date_generated, qcode, rigid_body_count, asset_extents, mass).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import datetime as _dt
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 from pxr import Gf, Kind, Sdf, Usd, UsdGeom, UsdPhysics, UsdSemantics, UsdShade, Vt
 
-LABEL = "amazon_box"
-CARDBOARD_RGB = (0.62, 0.47, 0.31)   # used when there is no texture (proxies)
+# Taxonomy (Wikidata)
+CLASS_LABEL = "cardboard box"
+QCODE = "Q1395006"                 # cardboard box: "box fabricated from cardboard"
+MATERIAL_QCODE = "Q7463524"        # corrugated fiberboard
+LABEL = "amazon_box"               # project-level class name kept in metadata
+
+CARDBOARD_RGB = (0.62, 0.47, 0.31)  # flat colour for proxies / displayColor fallback
 CARDBOARD_ROUGHNESS = 0.85
-FRICTION = (0.55, 0.45)              # static, dynamic: cardboard on wood/carpet
+FRICTION = (0.55, 0.45)             # static, dynamic: cardboard on wood/carpet
 RESTITUTION = 0.1
+
+PROFILE = "Robotics-Prop"
+PROFILE_VERSION = "4.0.0"
 
 
 @dataclass
 class BoxAsset:
-    name: str                  # BX_01 (USD-safe)
-    vertices: np.ndarray       # (N, 3) meters, Z-up, base at z=0
-    faces: np.ndarray          # (M, 3)
+    name: str                  # cardboard_box_01 (lowercase, file + prim name)
+    vertices: np.ndarray       # (N, 3) meters, Z-up, base at z=0, centred in X/Y
+    faces: np.ndarray          # (M, 3), counter-clockwise seen from outside
+    normals: np.ndarray        # (M*3, 3) faceVarying unit normals
     uv: np.ndarray | None      # (N, 2) per-vertex UVs, or None
-    texture: str | None        # file name relative to the USD file
+    texture: str | None        # path relative to the USD file, e.g. "textures/x_albedo.png"
+    display_rgb: tuple[float, float, float]
     mass_kg: float
+    dims_m: tuple[float, float, float]
+    meta: dict = field(default_factory=dict)   # extra provenance (source, sizing, tripo...)
 
 
-def write_box(path: Path, a: BoxAsset) -> None:
+def asset_name(asset_id: str) -> str:
+    """BX-01 -> cardboard_box_01 (lowercase, underscores: NP.002)."""
+    return f"cardboard_box_{asset_id.split('-')[-1].lower()}"
+
+
+def write_box(path: Path, a: BoxAsset, license_: str = "Proprietary", author: str = "TE SimScrub") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     stage = Usd.Stage.CreateNew(str(path))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     UsdPhysics.SetStageKilogramsPerUnit(stage, 1.0)
 
-    root = UsdGeom.Xform.Define(stage, f"/{a.name}")
+    root_path = Sdf.Path(f"/{a.name}")
+    root = UsdGeom.Xform.Define(stage, root_path)
     stage.SetDefaultPrim(root.GetPrim())
-    Usd.ModelAPI(root.GetPrim()).SetKind(Kind.Tokens.component)
+    rp = root.GetPrim()
+    Usd.ModelAPI(rp).SetKind(Kind.Tokens.component)
+    Usd.ModelAPI(rp).SetAssetInfo({
+        "identifier": Sdf.AssetPath(f"./{path.name}"),
+        "name": a.name,
+        "version": "1.0.0",
+    })
+    rp.SetDocumentation(f"SimReady cardboard box generated by {author} from a phone walkthrough.")
 
-    # ---- geometry ----
-    mesh = UsdGeom.Mesh.Define(stage, f"/{a.name}/geo")
+    # ---- Geometry: rigid body Xform + render/collision mesh ----
+    UsdGeom.Scope.Define(stage, root_path.AppendChild("Geometry"))
+    body = UsdGeom.Xform.Define(stage, root_path.AppendPath(f"Geometry/{a.name}"))
+    bp = body.GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(bp)
+    UsdPhysics.MassAPI.Apply(bp).CreateMassAttr(float(a.mass_kg))
+    UsdSemantics.LabelsAPI.Apply(bp, "wikidata_class").CreateLabelsAttr([CLASS_LABEL])
+    UsdSemantics.LabelsAPI.Apply(bp, "wikidata_qcode").CreateLabelsAttr([QCODE])
+
+    mesh = UsdGeom.Mesh.Define(stage, body.GetPath().AppendChild("mesh"))
     pts = a.vertices.astype(np.float32)
     mesh.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(pts))
     mesh.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(a.faces)))
     mesh.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(a.faces.astype(np.int32).ravel()))
     mesh.CreateExtentAttr([Gf.Vec3f(*pts.min(0).tolist()), Gf.Vec3f(*pts.max(0).tolist())])
     mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    mesh.CreateOrientationAttr(UsdGeom.Tokens.rightHanded)
     mesh.CreateDoubleSidedAttr(True)  # open flaps are single sheets
+    # Normals authored once, as the schema attribute (VG.027).
+    mesh.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(a.normals.astype(np.float32)))
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
+    mesh.CreateDisplayColorPrimvar(UsdGeom.Tokens.constant).Set([Gf.Vec3f(*a.display_rgb)])
     if a.uv is not None:
         st = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray,
                                                      UsdGeom.Tokens.faceVarying)
         st.Set(Vt.Vec2fArray.FromNumpy(a.uv[a.faces].reshape(-1, 2).astype(np.float32)))
+    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(UsdPhysics.Tokens.convexHull)
 
-    # ---- look ----
-    looks = f"/{a.name}/Looks"
-    mat = UsdShade.Material.Define(stage, f"{looks}/cardboard")
-    surf = UsdShade.Shader.Define(stage, f"{looks}/cardboard/surface")
+    # ---- Visual material (UsdPreviewSurface, spec-defined inputs only) ----
+    UsdGeom.Scope.Define(stage, root_path.AppendChild("VisualMaterials"))
+    mpath = root_path.AppendPath("VisualMaterials/cardboard")
+    mat = UsdShade.Material.Define(stage, mpath)
+    surf = UsdShade.Shader.Define(stage, mpath.AppendChild("preview_surface"))
     surf.CreateIdAttr("UsdPreviewSurface")
     surf.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(CARDBOARD_ROUGHNESS)
     surf.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
     if a.texture and a.uv is not None:
-        reader = UsdShade.Shader.Define(stage, f"{looks}/cardboard/st_reader")
+        reader = UsdShade.Shader.Define(stage, mpath.AppendChild("st_reader"))
         reader.CreateIdAttr("UsdPrimvarReader_float2")
         reader.CreateInput("varname", Sdf.ValueTypeNames.String).Set("st")
-        tex = UsdShade.Shader.Define(stage, f"{looks}/cardboard/albedo")
+        tex = UsdShade.Shader.Define(stage, mpath.AppendChild("base_color_texture"))
         tex.CreateIdAttr("UsdUVTexture")
-        tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(f"./{a.texture}")
+        tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(f"./{a.texture}"))
         tex.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("sRGB")
         tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(reader.ConnectableAPI(), "result")
         tex.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)
@@ -80,28 +140,55 @@ def write_box(path: Path, a: BoxAsset) -> None:
     else:
         surf.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*CARDBOARD_RGB))
     mat.CreateSurfaceOutput().ConnectToSource(surf.ConnectableAPI(), "surface")
+    # RTX semantic material label (SL.MAT.001): what the surface is made of.
+    UsdSemantics.LabelsAPI.Apply(mat.GetPrim(), "material").CreateLabelsAttr([MATERIAL_QCODE])
     UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
 
-    # ---- physics ----
-    UsdPhysics.RigidBodyAPI.Apply(root.GetPrim())
-    UsdPhysics.MassAPI.Apply(root.GetPrim()).CreateMassAttr(float(a.mass_kg))
-    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
-    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(UsdPhysics.Tokens.convexHull)
-
-    pmat = UsdShade.Material.Define(stage, f"{looks}/cardboard_physics")
+    # ---- Physics material (bound to the collider: PMT.001) ----
+    UsdGeom.Scope.Define(stage, root_path.AppendChild("PhysicsMaterials"))
+    pmat = UsdShade.Material.Define(stage, root_path.AppendPath("PhysicsMaterials/cardboard"))
     pm = UsdPhysics.MaterialAPI.Apply(pmat.GetPrim())
     pm.CreateStaticFrictionAttr(FRICTION[0])
     pm.CreateDynamicFrictionAttr(FRICTION[1])
     pm.CreateRestitutionAttr(RESTITUTION)
-    UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(
-        pmat, UsdShade.Tokens.weakerThanDescendants, "physics"
-    )
+    UsdSemantics.LabelsAPI.Apply(pmat.GetPrim(), "material").CreateLabelsAttr([MATERIAL_QCODE])
+    UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(pmat, UsdShade.Tokens.weakerThanDescendants, "physics")
 
-    # ---- semantics: Isaac Sim 5 reads LabelsAPI; older replicator reads Semantics ----
-    UsdSemantics.LabelsAPI.Apply(mesh.GetPrim(), "class").CreateLabelsAttr([LABEL])
-    legacy = mesh.GetPrim()
-    legacy.CreateAttribute("semantic:Semantics:params:semanticType", Sdf.ValueTypeNames.String).Set("class")
-    legacy.CreateAttribute("semantic:Semantics:params:semanticData", Sdf.ValueTypeNames.String).Set(LABEL)
+    # ---- Grasp line (FET_005): two points across the short side, mid-height ----
+    UsdGeom.Scope.Define(stage, root_path.AppendChild("Grasp"))
+    gx = UsdGeom.Xform.Define(stage, root_path.AppendPath("Grasp/grasp_identifier"))
+    gx.CreatePurposeAttr(UsdGeom.Tokens.guide)
+    L, W, H = a.dims_m
+    curve = UsdGeom.BasisCurves.Define(stage, gx.GetPath().AppendChild("grasp_identifier_curve"))
+    curve.CreateTypeAttr(UsdGeom.Tokens.linear)
+    curve.CreateCurveVertexCountsAttr([2])
+    curve.CreatePointsAttr([Gf.Vec3f(0, -W / 2, H / 2), Gf.Vec3f(0, W / 2, H / 2)])
+    curve.CreateWidthsAttr([0.005])
+    curve.CreatePurposeAttr(UsdGeom.Tokens.guide)
+    # Every boundable prim carries an extent (VG.002), including guide curves.
+    curve.CreateExtentAttr(UsdGeom.BasisCurves.ComputeExtent(curve.GetPointsAttr().Get(), curve.GetWidthsAttr().Get()))
 
-    stage.GetRootLayer().customLayerData = {"generator": "TE SimScrub", "asset": a.name}
+    # ---- Provenance + physical metadata (SR.004) ----
+    lo, hi = pts.min(0), pts.max(0)
+    ext = (hi - lo).tolist()
+    meta = {
+        "author": author,
+        "asset_name": a.name,
+        "asset_type": "prop",
+        "asset_license": license_,
+        "category": "packaging",
+        "source_file": a.meta.get("source_file", ""),
+        "usd_date_generated": _dt.date.today().isoformat(),
+        "qcode": QCODE,
+        "rigid_body_count": 1,
+        "asset_extents": Gf.Vec3f(*ext),
+        "mass": float(a.mass_kg),
+    }
+    layer = stage.GetRootLayer()
+    layer.customLayerData = {
+        "SimReady_Metadata": meta,
+        # Pipeline-specific provenance, kept separate from the spec's fields.
+        "SimScrub": {k: v for k, v in a.meta.items() if k != "source_file"},
+    }
+    layer.documentation = f"{a.name}: SimReady {PROFILE} asset, Z-up, meters, kg."
     stage.Save()

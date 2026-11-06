@@ -13,7 +13,7 @@ from typing import Callable
 from pxr import Usd, UsdGeom, UsdPhysics, UsdSemantics, UsdShade
 
 from simscrub.manifest import Check
-from simscrub.usd.author import LABEL
+from simscrub.usd.author import QCODE
 
 Rule = Callable[[Usd.Stage, Path], tuple[str, str]]
 RULES: list[tuple[str, str, Rule]] = []
@@ -77,15 +77,15 @@ def _collider(stage, _):
 
 @rule("rigid_body", "Rigid body + mass")
 def _body(stage, _):
-    root = stage.GetDefaultPrim()
-    if not root or not root.HasAPI(UsdPhysics.RigidBodyAPI):
-        return "fail", "No RigidBodyAPI on the asset root"
-    mass = UsdPhysics.MassAPI(root).GetMassAttr().Get()
+    bodies = [p for p in stage.Traverse() if p.HasAPI(UsdPhysics.RigidBodyAPI)]
+    if not bodies:
+        return "fail", "No prim has RigidBodyAPI"
+    mass = UsdPhysics.MassAPI(bodies[0]).GetMassAttr().Get()
     if not mass or mass <= 0:
         return "fail", "Mass missing or zero"
     if not 0.05 <= mass <= 10:
         return "warn", f"{mass:.2f} kg looks wrong for an empty box"
-    return "pass", f"{mass:.2f} kg"
+    return "pass", f"{mass:.2f} kg on {bodies[0].GetName()}"
 
 
 @rule("material", "Material bound")
@@ -105,13 +105,50 @@ def _material(stage, path):
     return "pass", "Flat cardboard colour"
 
 
-@rule("label", "Semantic label")
+@rule("label", "Wikidata labels")
 def _label(stage, _):
-    m = _mesh(stage)
-    if not m or not m.GetPrim().HasAPI(UsdSemantics.LabelsAPI, "class"):
-        return "fail", "No class label"
-    labels = UsdSemantics.LabelsAPI(m.GetPrim(), "class").GetLabelsAttr().Get()
-    return ("pass", f"class = {list(labels)[0]}") if labels and LABEL in labels else ("fail", f"labels = {labels}")
+    for p in stage.Traverse():
+        if p.HasAPI(UsdSemantics.LabelsAPI, "wikidata_qcode"):
+            q = UsdSemantics.LabelsAPI(p, "wikidata_qcode").GetLabelsAttr().Get() or []
+            if QCODE in q:
+                cls = UsdSemantics.LabelsAPI(p, "wikidata_class").GetLabelsAttr().Get() or []
+                return "pass", f"{QCODE} · {', '.join(cls) or 'no class'}"
+            return "fail", f"wikidata_qcode = {list(q)}"
+    if any(p.HasAttribute("semantic:Semantics:params:semanticData") for p in stage.Traverse()):
+        return "fail", "Only the deprecated Semantics schema"
+    return "fail", "No wikidata_qcode label"
+
+
+@rule("asset_info", "Component + assetInfo")
+def _asset_info(stage, _):
+    root = stage.GetDefaultPrim()
+    kind = Usd.ModelAPI(root).GetKind() if root else None
+    info = root.GetAssetInfo() if root else {}
+    if kind != "component":
+        return "fail", f"kind = {kind or 'none'}"
+    if "identifier" not in info or "name" not in info:
+        return "fail", "assetInfo needs identifier + name"
+    return "pass", f"{info['name']} v{info.get('version', '?')}"
+
+
+@rule("metadata", "SimReady metadata")
+def _metadata(stage, _):
+    need = ["author", "asset_name", "asset_type", "asset_license", "category", "source_file",
+            "usd_date_generated", "qcode", "rigid_body_count", "asset_extents", "mass"]
+    md = stage.GetRootLayer().customLayerData.get("SimReady_Metadata", {})
+    missing = [k for k in need if k not in md]
+    return ("pass", f"{len(need)} provenance fields") if not missing else ("fail", "missing " + ", ".join(missing))
+
+
+@rule("thumbnail", "Thumbnail 256×256")
+def _thumb(stage, path):
+    t = path.parent / ".thumbs" / "256x256" / f"{path.name}.png"
+    if not t.exists():
+        return "fail", f".thumbs/256x256/{path.name}.png missing"
+    from PIL import Image
+
+    with Image.open(t) as im:
+        return ("pass", ".thumbs/256x256") if im.size == (256, 256) else ("fail", f"{im.size[0]}x{im.size[1]}")
 
 
 def validate(path: Path) -> list[Check]:

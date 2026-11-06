@@ -57,6 +57,33 @@ export interface Asset {
   usd: string | null;
   clean_mesh: string | null;
   clean_tris: number | null;
+  spec: Spec | null;
+}
+
+export interface SpecFeature {
+  id: string;
+  name: string;
+  required: boolean;
+  status: "pass" | "fail" | "n/a";
+  version: string;
+  failing: string[];
+  unmet_optional: string[];
+  messages: Record<string, string[]>;
+}
+
+export interface Spec {
+  standard: string;
+  profile: string;
+  version: string;
+  validator?: string;
+  state: "pass" | "fail" | "unavailable" | "error";
+  required_passed?: number;
+  required_total?: number;
+  optional_passed?: number;
+  features?: SpecFeature[];
+  date?: string;
+  stamped?: boolean;
+  detail?: string;
 }
 
 export interface Job {

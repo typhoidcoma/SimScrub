@@ -156,11 +156,11 @@ def run_simready(job: Job, job_dir: Path, update: Update) -> None:
             _set(job, "simready", Status.working, (n + done) / max(1, len(todo)))
             update(job)
 
-        simready.prepare(a, job.assets, job_dir, changed)
+        simready.prepare(a, job.assets, job_dir, changed, job=job)
 
     failed = [a for a in todo if any(s.status == "failed" for s in a.prep)]
     flagged = [a for a in todo if any(c.status in ("warn", "fail") for c in a.checks)
-               or a.recon.status == "proxy"]
+               or a.recon.status == "proxy" or (a.spec or {}).get("state") == "fail"]
     msg = f"{len(todo) - len(failed)}/{len(todo)} assets SimReady"
     if flagged:
         msg += f" · {len(flagged)} need a look"
@@ -234,7 +234,7 @@ def run_settle(job: Job, job_dir: Path, update: Update, seconds: float = 4.0) ->
                   detail="all boxes above z=0" if res["none_fell_through"] else "a box ended below the floor"),
         ]
         for b in job.stage.layout:
-            r_ = boxes.get(b["id"].replace("-", "_"))
+            r_ = boxes.get(b.get("usd_name") or b["id"].replace("-", "_"))
             if r_:
                 b["settled"] = r_
     except Exception as e:  # noqa: BLE001

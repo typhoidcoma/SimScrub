@@ -28,6 +28,7 @@ from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 from simscrub.errors import chip_for
 from simscrub.manifest import Asset, Check, Job, Step
+from simscrub.usd.author import asset_name
 
 Changed = Callable[[], None]
 
@@ -194,7 +195,7 @@ def _write_stage(path: Path, placed: list[Placed], floor: tuple[float, float]) -
 
     boxes = UsdGeom.Scope.Define(stage, "/World/Boxes")
     for p in placed:
-        prim_path = f"{boxes.GetPath()}/{p.asset.id.replace('-', '_')}"
+        prim_path = f"{boxes.GetPath()}/{asset_name(p.asset.id)}"
         x = UsdGeom.Xform.Define(stage, prim_path)
         x.GetPrim().GetReferences().AddReference(f"./{p.asset.usd}")
         UsdGeom.XformCommonAPI(x).SetTranslate(Gf.Vec3d(p.x, p.y, p.z + DROP_M))
@@ -220,11 +221,12 @@ def _validate_stage(path: Path, placed: list[Placed]) -> list[Check]:
     broken, bodies, below = [], 0, []
     boxes = []
     for p in placed:
-        prim = stage.GetPrimAtPath(f"/World/Boxes/{p.asset.id.replace('-', '_')}")
+        prim = stage.GetPrimAtPath(f"/World/Boxes/{asset_name(p.asset.id)}")
         if not prim.IsValid() or not prim.GetChildren():
             broken.append(p.asset.id)
             continue
-        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+        # SimReady assets carry the rigid body on Geometry/<name>, below the reference root.
+        if any(q.HasAPI(UsdPhysics.RigidBodyAPI) for q in Usd.PrimRange(prim)):
             bodies += 1
         r = bbox.ComputeWorldBound(prim).ComputeAlignedRange()
         if r.GetMin()[2] < -1e-3:
@@ -328,7 +330,7 @@ def assemble(job: Job, job_dir: Path, changed: Changed) -> None:
         job.stage.total_mass_kg = round(sum(
             float(s.detail.split(" kg")[0]) for a in assets for s in a.prep
             if s.name == "Physics + label" and " kg" in s.detail), 2)
-        job.stage.layout = [{"id": p.asset.id, "x": round(p.x, 3), "y": round(p.y, 3), "z": round(p.z, 3),
+        job.stage.layout = [{"id": p.asset.id, "usd_name": asset_name(p.asset.id), "x": round(p.x, 3), "y": round(p.y, 3), "z": round(p.z, 3),
                              "on": p.on, "source": p.source} for p in placed]
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()

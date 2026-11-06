@@ -19,7 +19,13 @@ export default function App() {
 
   const busy = job ? STAGES.some((s) => job.stages[s].status === "working") : false;
   const working = job ? STAGES.find((s) => job.stages[s].status === "working") : undefined;
-  const active: StageName = picked && picked.during === working ? picked.tab : working ?? picked?.tab ?? "capture";
+  // Remember the last stage that ran, so finishing a run leaves you on it
+  // (e.g. Re-assemble stays on Stage) instead of dropping back to Capture.
+  const [lastRun, setLastRun] = useState<StageName | undefined>(undefined);
+  if (working && working !== lastRun) setLastRun(working);
+  const active: StageName = working
+    ? (picked && picked.during === working ? picked.tab : working)   // follow the run unless you looked away
+    : (picked?.tab ?? lastRun ?? "capture");                          // idle: your tab, else where the run ended
 
   const idx = STAGES.indexOf(active);
   const next = STAGES[idx + 1];

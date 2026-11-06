@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from simscrub import pipeline
 from pydantic import BaseModel
@@ -323,6 +323,89 @@ async def stage_settle() -> dict:
 def list_videos() -> list[str]:
     """Videos sitting in the project folder, offered as one-click inputs."""
     return sorted(p.name for p in ROOT.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT)
+
+
+def _video_info(path: Path) -> dict:
+    """Facts an artist can check at a glance: is this the right clip?"""
+    import cv2
+
+    cap = cv2.VideoCapture(str(path))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
+    cap.release()
+    codec = "".join(chr((cc >> 8 * i) & 0xFF) for i in range(4)).strip("\x00 ") or "?"
+    return {
+        "name": path.name, "size_mb": round(path.stat().st_size / 1e6, 1),
+        "duration_s": round(n / fps, 1) if fps else None, "fps": round(fps, 1) if fps else None,
+        "width": w, "height": h, "codec": codec,
+        # Chrome/Edge only play HEVC with hardware support; the pipeline (OpenCV) reads it either way.
+        "browser_may_not_play": codec.lower() in ("hevc", "hev1", "hvc1", "h265"),
+    }
+
+
+def _poster(path: Path) -> Response:
+    import cv2
+
+    cap = cv2.VideoCapture(str(path))
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, n // 10)   # a frame a little way in, past any fade-in
+    ok, img = cap.read()
+    cap.release()
+    if not ok:
+        raise HTTPException(404, "Couldn't read a frame from that video.")
+    k = 960 / max(img.shape[:2])
+    if k < 1:
+        img = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return Response(buf.tobytes(), media_type="image/jpeg")
+
+
+def _project_video(name: str) -> Path:
+    path = (ROOT / name).resolve()
+    if path.parent != ROOT.resolve() or not path.is_file() or path.suffix.lower() not in VIDEO_EXT:
+        raise HTTPException(404, "No such video in the project folder.")
+    return path
+
+
+def _job_video() -> Path:
+    found = sorted(hub.job_dir.glob("source.*"))
+    if not found:
+        raise HTTPException(404, "This job has no video yet.")
+    return found[0]
+
+
+@app.get("/api/videos/{name}/file")
+def project_video_file(name: str) -> FileResponse:
+    return FileResponse(_project_video(name))
+
+
+@app.get("/api/videos/{name}/info")
+def project_video_info(name: str) -> dict:
+    return _video_info(_project_video(name))
+
+
+@app.get("/api/videos/{name}/poster")
+def project_video_poster(name: str) -> Response:
+    return _poster(_project_video(name))
+
+
+@app.get("/api/job/video/file")
+def job_video_file() -> FileResponse:
+    return FileResponse(_job_video())
+
+
+@app.get("/api/job/video/info")
+def job_video_info() -> dict:
+    info = _video_info(_job_video())
+    info["name"] = hub.job.capture.video or info["name"]
+    return info
+
+
+@app.get("/api/job/video/poster")
+def job_video_poster() -> Response:
+    return _poster(_job_video())
 
 
 @app.get("/api/jobs/{job_id}/files/{rel:path}")
