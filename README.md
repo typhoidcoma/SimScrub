@@ -1,35 +1,33 @@
 # TE SimScrub
 
-**Video in, SimReady USD out.** Walk through a room with your phone; SimScrub finds every cardboard box, turns each one into a textured 3D model, cleans it into a physics-ready, true-scale [NVIDIA SimReady](https://nvidia.github.io/simready-foundation/latest/guides/getting_started.html) USD asset, and drops them all into Isaac Sim.
+**Video in, SimReady USD out.**
 
-It is built for artists, not pipeline engineers: every step happens in the open, says what it did and why, and lets you step in (exclude a bad detection, type a tape measurement, re-run one stage) without touching a command line.
+Walk through a room with your phone. SimScrub finds every cardboard box, turns each into a textured 3D model, cleans it into a true-scale, physics-ready [NVIDIA SimReady](https://nvidia.github.io/simready-foundation/latest/guides/getting_started.html) USD asset, and drops them all into Isaac Sim.
 
-[![Isaac Sim drop test of the cleaned boxes. Click for the full 1-minute demo.](docs/media/isaac_drop.gif)](docs/media/simscrub_demo_1min.mp4)
+Built for artists, not pipeline engineers: every step runs in the open, says what it did and why, and lets you step in without a command line.
 
-▶ **[Watch the 1-minute demo](docs/media/simscrub_demo_1min.mp4)**: phone video → boxes found → Tripo meshes → SimReady cleanup → Isaac Sim drop test.
+<!-- DEMO VIDEO -->
+
+[![Isaac Sim drop test of the cleaned boxes](docs/media/isaac_drop.gif)](docs/media/simscrub_demo_1min.mp4)
 
 ---
 
-## The pipeline at a glance
+## Pipeline
 
 ```mermaid
 flowchart LR
-    A[01 Capture<br/>phone video] --> B[02 Segment<br/>find the boxes]
-    B --> C[03 Reconstruct<br/>Tripo image-to-3D]
-    C --> D[04 SimReady<br/>clean, scale, physics, USD]
-    D --> E[05 Stage<br/>assemble + physics test]
-    E --> F[Isaac Sim]
+    A[Capture] --> B[Segment] --> C[Reconstruct] --> D[SimReady] --> E[Stage] --> F[Isaac Sim]
 ```
 
-| Stage | In plain words | What comes out |
+| Stage | What it does | Output |
 |---|---|---|
-| **01 Capture** | Pulls sharp still frames out of your video. | ~8 frames per second of footage, blurry ones dropped |
-| **02 Segment** | Finds every cardboard box, follows each one through the video, and cuts out its best view. | One clean cut-out image per box |
-| **03 Reconstruct** | Sends each cut-out to Tripo, which builds a textured 3D model from a single photo. | A raw textured mesh per box (up to 500k triangles) |
-| **04 SimReady** | Cleans each mesh, sizes it to real-world units, gives it physics, and writes a validated USD asset. | `cardboard_box_NN.usda` + texture + thumbnail |
-| **05 Stage** | Places the boxes on a floor the way they sat in the room, then checks they settle under real physics. | `stage.usda`, opened in Isaac Sim |
+| **01 Capture** | Pulls sharp frames from the video | Frames, blurry ones dropped |
+| **02 Segment** | Finds and tracks every box | One cut-out per box |
+| **03 Reconstruct** | Tripo builds a 3D model from each cut-out | Raw textured mesh |
+| **04 SimReady** | Cleans, sizes, adds physics, writes USD | Validated USD asset |
+| **05 Stage** | Places the boxes, tests physics | `stage.usda` in Isaac Sim |
 
-The job folder (`jobs/<name>/manifest.json`) is the single source of truth. Every stage reads it and writes to it, so you can re-run any one stage without redoing the others, and nothing that cost money (Tripo credits) is ever paid for twice.
+Every stage reads and writes one job file (`jobs/<name>/manifest.json`), so any stage can be re-run on its own and Tripo credits are never spent twice.
 
 ---
 
@@ -116,11 +114,11 @@ MeshLab is native code, so repair and decimate each run in an **isolated child p
 Every box is a [SimReady](https://nvidia.github.io/simready-foundation/latest/guides/getting_started.html) asset, profile **Robotics-Prop 4.0.0**:
 
 ```
-assets/cardboard_box_01/simready_usd/
-  cardboard_box_01.usda                      main file (NP.005 layout)
-  textures/cardboard_box_01_albedo.png
-  .thumbs/256x256/cardboard_box_01.usda.png  thumbnail (SR.002)
-  .simready/validation.json                  NVIDIA validator report
+cardboard_box_01/simready_usd/
+├─ cardboard_box_01.usda      main file
+├─ textures/                  albedo PNG
+├─ .thumbs/256x256/           thumbnail
+└─ .simready/validation.json  NVIDIA report
 ```
 
 - Root `Xform`, `kind=component`, `assetInfo` (identifier, name, version); Z-up, meters, kilograms.
@@ -135,9 +133,10 @@ assets/cardboard_box_01/simready_usd/
 ```bash
 # backend
 python -m venv .venv
-.venv/Scripts/python -m pip install -e .[dev]
-.venv/Scripts/python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-.venv/Scripts/python -m pip install ultralytics opencv-python
+pip=".venv/Scripts/python -m pip"
+$pip install -e .[dev] ultralytics opencv-python
+$pip install torch torchvision \
+  --index-url https://download.pytorch.org/whl/cu128
 .venv/Scripts/python -m uvicorn server.app:app --port 8000
 
 # frontend (second terminal)
@@ -151,12 +150,13 @@ Tripo needs `TRIPO_API_KEY=...` in `.env` (git-ignored) and API credits, which a
 ### Headless (same code, no UI)
 
 ```bash
-.venv/Scripts/python -m simscrub.cli segment path/to/walkthrough.mp4 --job office
-.venv/Scripts/python -m simscrub.cli reconstruct --plan   # cost + Tripo balance, spends nothing
-.venv/Scripts/python -m simscrub.cli reconstruct          # textured mesh per kept box (cached)
-.venv/Scripts/python -m simscrub.cli simready             # the nine cleanup steps
-.venv/Scripts/python -m simscrub.cli validate jobs/office/assets/cardboard_box_01/simready_usd/cardboard_box_01.usda
-.venv/Scripts/python -m simscrub.cli assemble             # stage.usda: boxes + floor + physics
+cli="-m simscrub.cli"; py=.venv/Scripts/python
+$py $cli segment walkthrough.mp4 --job office
+$py $cli reconstruct --plan   # cost + balance, spends nothing
+$py $cli reconstruct          # mesh per kept box (cached)
+$py $cli simready             # the nine cleanup steps
+$py $cli assemble             # stage.usda
+$py $cli validate <asset>.usda
 ```
 
 ### NVIDIA SimReady validator (optional, step 9)
@@ -164,9 +164,11 @@ Tripo needs `TRIPO_API_KEY=...` in `.env` (git-ignored) and API credits, which a
 Needs Python 3.12 and a clone of the SimReady Foundation repo:
 
 ```bat
-git clone https://github.com/NVIDIA/simready-foundation %USERPROFILE%\.simscrub\simready-foundation
-py -3.12 -m venv %USERPROFILE%\.simscrub\simready-venv
-cd %USERPROFILE%\.simscrub\simready-foundation && %USERPROFILE%\.simscrub\simready-venv\Scripts\pip install -r requirements.txt
+set S=%USERPROFILE%\.simscrub
+git clone https://github.com/NVIDIA/simready-foundation %S%\simready-foundation
+py -3.12 -m venv %S%\simready-venv
+cd %S%\simready-foundation
+%S%\simready-venv\Scripts\pip install -r requirements.txt
 ```
 
 Without it, step 9 is skipped with a note and everything else still works.
@@ -176,8 +178,11 @@ Without it, step 9 is skipped with a note and everything else still works.
 Isaac Sim 5.1 installs with pip into its own Python 3.11 venv, outside OneDrive, at `%USERPROFILE%\.simscrub\isaac-venv` (override with `SIMSCRUB_ISAAC_VENV`):
 
 ```bat
-py -3.11 -m venv %USERPROFILE%\.simscrub\isaac-venv
-%USERPROFILE%\.simscrub\isaac-venv\Scripts\python -m pip install "isaacsim[all,extscache]==5.1.0.0" --extra-index-url https://pypi.nvidia.com
+set S=%USERPROFILE%\.simscrub
+py -3.11 -m venv %S%\isaac-venv
+%S%\isaac-venv\Scripts\python -m pip install ^
+  "isaacsim[all,extscache]==5.1.0.0" ^
+  --extra-index-url https://pypi.nvidia.com
 ```
 
 Launching Isaac Sim from the app accepts the NVIDIA Omniverse EULA (`OMNI_KIT_ACCEPT_EULA=YES`). On 8 GB laptop GPUs (below Isaac Sim's 10 GB minimum) the default Vulkan renderer crashes at startup, so SimScrub runs Isaac Sim on Direct3D 12 (`--/app/vulkan=false`), which works.
@@ -186,25 +191,32 @@ Launching Isaac Sim from the app accepts the NVIDIA Omniverse EULA (`OMNI_KIT_AC
 
 ## Code map
 
+**`simscrub/`**: the pipeline (Python)
+
+| File | What |
+|---|---|
+| `manifest.py` | Job file every stage reads and writes |
+| `pipeline.py` | Stage runners shared by CLI and server |
+| `cli.py` | Command line |
+| `errors.py` | Errors → plain-language chips |
+| `sizing.py` | Best-guess size from proportions |
+| `stages/capture.py` | Frames + sharpness |
+| `stages/segment.py` | Box finding, tracking, crops |
+| `stages/tripo.py` | Tripo API client |
+| `stages/reconstruct.py` | Mesh per box, cache, fallback |
+| `stages/meshops.py` | MeshLab repair + decimate |
+| `stages/simready.py` | The nine SimReady steps |
+| `stages/assemble.py` | Stage layout, physics, checks |
+| `usd/author.py` | Writes the USD asset |
+| `usd/validate.py` | Fast rule validator |
+| `usd/nvidia_validate.py` | NVIDIA `simready-validate` |
+
+**Elsewhere**
+
 | Path | What |
 |---|---|
-| `simscrub/manifest.py` | Job manifest: the single source of truth every stage reads and writes |
-| `simscrub/stages/capture.py` | Frame extraction and sharpness scoring |
-| `simscrub/stages/segment.py` | YOLOE box finding, motion-compensated tracking, crops |
-| `simscrub/stages/tripo.py` | Tripo v3 API client (upload, image-to-model, poll, download, balance) |
-| `simscrub/stages/reconstruct.py` | Mesh per box, cache, proxy fallback, per-box visible steps |
-| `simscrub/stages/meshops.py` | MeshLab repair + decimate, each in an isolated child process |
-| `simscrub/stages/simready.py` | The nine SimReady steps |
-| `simscrub/sizing.py` | Best-guess real size from proportions (common carton catalog) |
-| `simscrub/usd/author.py` | Writes one SimReady box asset as USD |
-| `simscrub/usd/validate.py` | Rule-registry validator (fast first pass) |
-| `simscrub/usd/nvidia_validate.py` | Runs NVIDIA's `simready-validate` and summarises it for the UI |
-| `simscrub/stages/assemble.py` | Stage assembly: placement, stacking, floor, physics, stage checks, preview |
-| `isaac/settle.py` | Headless Isaac Sim physics settle test |
-| `isaac/open_stage.py` | Opens the stage in Isaac Sim, frames the camera, takes Drop / Play / Stop commands |
-| `simscrub/pipeline.py` | Stage runners shared by the CLI and the server |
-| `simscrub/errors.py` | Exceptions mapped to plain-language chips for the UI |
-| `simscrub/cli.py` | Command line entry point |
-| `server/app.py` | FastAPI server; pushes the manifest over `/ws` after every change |
-| `ui/` | React + Vite front end, one tab per stage, live 3D via `<model-viewer>` |
-| `ui/scripts/` | Playwright checks and the demo recorders (`record_demo.mjs`, `record_screen.mjs`) |
+| `server/app.py` | FastAPI + live `/ws` updates |
+| `isaac/settle.py` | Headless physics test |
+| `isaac/open_stage.py` | Isaac window, Drop / Play / Stop |
+| `ui/` | React + Vite front end |
+| `ui/scripts/` | Playwright checks, demo recorders |
