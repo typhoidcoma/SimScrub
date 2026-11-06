@@ -14,10 +14,7 @@ Built for artists, not pipeline engineers: every step runs in the open, says wha
 
 ## Pipeline
 
-```mermaid
-flowchart LR
-    A[Capture] --> B[Segment] --> C[Reconstruct] --> D[SimReady] --> E[Stage] --> F[Isaac Sim]
-```
+**Capture → Segment → Reconstruct → SimReady → Stage → Isaac Sim**
 
 | Stage | What it does | Output |
 |---|---|---|
@@ -129,6 +126,10 @@ cardboard_box_01/simready_usd/
 ---
 
 ## Run it
+
+**Quick launch (Windows):** after the one-time setup below, double-click **`SimScrub.cmd`**. It starts the backend and UI (skipping whichever is already running) and opens the app in a clean Chrome window. **`Stop SimScrub.cmd`** shuts both down.
+
+**Setup:**
 
 ```bash
 # backend
