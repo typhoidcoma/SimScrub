@@ -32,9 +32,17 @@ Every stage reads and writes one job file (`jobs/<name>/manifest.json`), so any 
 
 ### 01 Capture: getting good frames
 
+> **Pick your walkthrough video, watch it play back to be sure it's the right one, and press Process.**
+
+![Capture: the walkthrough video plays in the preview, then Process](docs/media/step1_capture.gif)
+
 Phone video is mostly motion blur. Capture samples the video at 8 fps, scales frames to 1600 px, scores each frame's sharpness (variance of the Laplacian: how much fine edge detail it has), and drops frames much blurrier than the median. The **Capture** tab plays your video back first, so you can confirm you picked the right one before anything runs.
 
 ### 02 Segment: finding the boxes
+
+> **Every cardboard box in the video is found, outlined and numbered. Tap a bad one to drop it before it costs anything.**
+
+![Segment: boxes outlined on the hero frame, one is tapped out](docs/media/step2_segment.gif)
 
 1. **Detection.** [YOLOE](https://docs.ultralytics.com/models/yoloe/) is an open-vocabulary model: instead of a fixed list of classes, you give it text. SimScrub asks only for `cardboard box` and `brown cardboard box`, so chairs, desks and guitars are ignored. Free weights download from the Ultralytics GitHub releases on first run.
 2. **Tracking.** The same box shows up in dozens of frames. An IoU tracker links detections frame-to-frame, with **camera-motion compensation**: optical flow on the background estimates how the phone moved, so a box that pans out of view and comes back keeps the same ID instead of becoming a duplicate.
@@ -43,15 +51,21 @@ Phone video is mostly motion blur. Capture samples the video at 8 fps, scales fr
 
 ### 03 Reconstruct: photo to 3D
 
+> **Each box photo becomes a textured 3D model you can spin and inspect, with the credit cost shown before you spend it.**
+
+![Reconstruct: raw Tripo meshes appear, one is inspected and rotated](docs/media/step3_reconstruct.gif)
+
 Each kept crop goes to the Tripo image-to-3D API (model v3.1, standard texture, 30 credits per box), capped at 500k triangles. The tab shows the cost and your balance **before** you spend anything, and every result is cached by a hash of the crop image, so re-runs are free. **Regenerate** deliberately pays for a fresh batch. If Tripo fails for a box, it becomes a fitted placeholder cuboid with a plain-language reason, so the pipeline never dead-ends.
 
 The raw meshes are shown exactly as Tripo returned them, live and rotatable, so you can judge them before cleanup.
 
 ### 04 SimReady: from raw mesh to sim asset
 
-Raw generated meshes are heavy, unitless, arbitrarily oriented and have no physics. SimReady fixes that in nine visible steps per box. Each step reports what it changed, with a hover explanation:
+> **Each raw mesh is cleaned into a light, true-scale, physics-ready USD asset, step by step in front of you, then checked against NVIDIA's SimReady spec.**
 
-![SimReady running: each step reports what it did](docs/media/simready_steps.jpg)
+![SimReady: nine steps run per box until every card is green, then raw vs clean Compare](docs/media/step4_simready.gif)
+
+Raw generated meshes are heavy, unitless, arbitrarily oriented and have no physics. SimReady fixes that in nine visible steps per box. Each step reports what it changed, with a hover explanation:
 
 #### 1. Repair
 Generated meshes come with junk: duplicated vertices along texture seams, zero-area triangles, and small floating fragments ("floaters") the AI hallucinated around the object. Using [MeshLab](https://pymeshlab.readthedocs.io/) it:
@@ -98,11 +112,22 @@ Runs NVIDIA's own `simready-validate` against the **Robotics-Prop 4.0.0** profil
 
 MeshLab is native code, so repair and decimate each run in an **isolated child process**: a crash in a bad mesh shows up as a red step on that one box, not a dead server.
 
-### 05 Stage: into Isaac Sim
+### 05 Stage: building the scene
+
+> **The boxes are placed on a floor the way they sat in the room, and a real physics test proves they settle.**
+
+![Stage: the stage assembles, then the headless physics test passes](docs/media/step5_stage.gif)
 
 - **Assemble** builds `stage.usda`: each SimReady asset as a USD **reference** (re-running SimReady updates the stage automatically), a floor collider, a physics scene with gravity, and lights. Positions are estimated from the video frame (phone assumed at 1.3 m height, tilted 20° down); a box seen sitting on another is **stacked**, and overlaps are pushed apart. Boxes spawn 2 cm up and settle under gravity. Eight stage checks run on the written file.
 - **Test physics** runs real PhysX in Isaac Sim with no window (`isaac/settle.py`) for 4 simulated seconds and reports, per box, how far it dropped, slid and tilted, and whether it came to rest.
-- **Launch Isaac** opens the stage in the full Isaac Sim window, framed so every box is in view. While it's open, the **Stage** tab drives it: **Drop test** lifts every box 40 cm and lets them fall onto the floor and each other; **Pile drop ×16** hides the layout and drops 16 copies of your SimReady boxes as a tower onto stage centre, so you can watch rigid-body dynamics box on box; **Play** / **Stop** control the simulation. Both drops edit only Isaac's session layer: the stage file on disk is never changed.
+
+### 06 Isaac Sim: the payoff
+
+> **One click opens the stage in Isaac Sim. Drop the boxes, or drop a 16-box tower and watch them pile up.**
+
+![Isaac Sim: 16 SimReady boxes drop as a tower and settle into a heap](docs/media/isaac_pile_drop.gif)
+
+**Launch Isaac** opens the stage in the full Isaac Sim window, framed so every box is in view. While it's open, the **Stage** tab drives it: **Drop test** lifts every box 40 cm and lets them fall onto the floor and each other; **Pile drop ×16** hides the layout and drops 16 copies of your SimReady boxes as a tower onto stage centre, so you can watch rigid-body dynamics box on box; **Play** / **Stop** control the simulation. Both drops edit only Isaac's session layer: the stage file on disk is never changed.
 
 ---
 
