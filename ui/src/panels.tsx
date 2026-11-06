@@ -816,7 +816,7 @@ export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | nul
     return () => { live = false; window.clearInterval(t); };
   }, []);
 
-  const control = async (cmd: "play" | "stop" | "drop") => {
+  const control = async (cmd: "play" | "stop" | "drop" | "pile") => {
     setLaunchErr(null);
     const r = await fetch(`/api/isaac/control?cmd=${cmd}`, { method: "POST" });
     if (!r.ok) setLaunchErr((await r.json().catch(() => ({}))).detail ?? "Isaac Sim didn't take the command");
@@ -924,6 +924,10 @@ export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | nul
               <button className="btn btn-primary" onClick={() => control("drop")}
                 title="Reset, lift every box 40 cm and play: watch them fall and settle in Isaac Sim">
                 Drop test
+              </button>
+              <button className="btn btn-primary" onClick={() => control("pile")}
+                title="Hide the layout and drop 16 copies of your SimReady boxes as a tower onto stage centre: rigid-body dynamics, box on box. Drop test brings the layout back.">
+                Pile drop ×16
               </button>
               <button className="btn btn-ghost" onClick={() => control("play")}>Play</button>
               <button className="btn btn-ghost" onClick={() => control("stop")}>Stop</button>

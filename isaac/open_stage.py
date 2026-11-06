@@ -13,6 +13,7 @@ the stage file on disk is never changed.
 
 import asyncio
 import json
+import math
 import os
 import time
 
@@ -82,12 +83,87 @@ def _frame_camera(stage) -> None:
         ctx.get_selection().clear_selected_prim_paths()
 
 
+PILE = "/World/Pile"
+
+
+def _clear_pile(stage) -> None:
+    """Remove the pile and bring the placed boxes back (session layer only)."""
+    with Usd.EditContext(stage, stage.GetSessionLayer()):
+        if stage.GetPrimAtPath(PILE).IsValid():
+            stage.RemovePrim(PILE)
+        for path in _boxes:
+            stage.GetPrimAtPath(path).SetActive(True)
+
+
+def _pile_camera(cx: float, cy: float) -> None:
+    from isaacsim.core.utils.viewports import set_camera_view
+
+    # Aim at mid-tower: the 2 m tower fits on the way down, the heap fills the lower half.
+    set_camera_view(eye=[cx + 2.1, cy - 3.5, 1.7], target=[cx, cy, 0.75])
+
+
+async def _pile(count: int) -> None:
+    """Hide the placed boxes; drop ``count`` copies of them as a tower onto stage centre."""
+    import random
+
+    tl = omni.timeline.get_timeline_interface()
+    tl.stop()
+    for _ in range(5):
+        await omni.kit.app.get_app().next_update_async()
+    stage = omni.usd.get_context().get_stage()
+    _clear_pile(stage)
+    root = stage.GetRootLayer()
+    stage_dir = os.path.dirname(STAGE)
+    # Asset files each placed box references (stage-relative in the file; absolute here,
+    # because the session layer has no folder to resolve relative paths against).
+    assets = []
+    for path in _boxes:
+        spec = root.GetPrimAtPath(path)
+        refs = list(spec.referenceList.prependedItems) if spec else []
+        if refs:
+            assets.append(os.path.normpath(os.path.join(stage_dir, refs[0].assetPath)))
+    if not assets:
+        report("failed", "no box assets to pile")
+        return
+    cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+    pts = [cache.ComputeWorldBound(stage.GetPrimAtPath(p)).ComputeAlignedRange().GetMidpoint() for p in _boxes]
+    cx = (min(p[0] for p in pts) + max(p[0] for p in pts)) / 2
+    cy = (min(p[1] for p in pts) + max(p[1] for p in pts)) / 2
+
+    _pile_camera(cx, cy)              # move first, so the tower appears already framed
+    rng = random.Random(7)            # same pile every time: repeatable demo takes
+    with Usd.EditContext(stage, stage.GetSessionLayer()):
+        for path in _boxes:
+            stage.GetPrimAtPath(path).SetActive(False)
+        UsdGeom.Scope.Define(stage, PILE)
+        per_layer = 4
+        for i in range(count):
+            layer, slot = divmod(i, per_layer)
+            ang = math.radians(90 * slot + 45 * (layer % 2) + rng.uniform(-15, 15))
+            r = 0.26 + rng.uniform(-0.05, 0.08)
+            x = UsdGeom.Xform.Define(stage, f"{PILE}/box_{i + 1:02d}")
+            x.GetPrim().GetReferences().AddReference(assets[i % len(assets)])
+            xf = UsdGeom.XformCommonAPI(x)
+            xf.SetTranslate(Gf.Vec3d(cx + r * math.cos(ang), cy + r * math.sin(ang), 0.5 + 0.42 * layer))
+            xf.SetRotate(Gf.Vec3f(rng.uniform(-25, 25), rng.uniform(-25, 25), rng.uniform(0, 360)))
+    for _ in range(40):
+        await omni.kit.app.get_app().next_update_async()
+    _pile_camera(cx, cy)              # again: loading new references can reset the view
+    for _ in range(40):               # hold the tower on screen for a beat, then let go
+        await omni.kit.app.get_app().next_update_async()
+    tl.play()
+    report("dropping", f"pile of {count} boxes")
+
+
 async def _drop(lift: float) -> None:
     tl = omni.timeline.get_timeline_interface()
     tl.stop()                      # physics resets bodies to their authored poses
     for _ in range(5):
         await omni.kit.app.get_app().next_update_async()
     stage = omni.usd.get_context().get_stage()
+    if stage.GetPrimAtPath(PILE).IsValid():
+        _clear_pile(stage)
+        _frame_camera(stage)
     with Usd.EditContext(stage, stage.GetSessionLayer()):
         for path in _boxes:
             xf = UsdGeom.XformCommonAPI(stage.GetPrimAtPath(path))
@@ -142,6 +218,8 @@ def _on_update(_e) -> None:
         tl.stop(); report("opened", f"{len(_boxes)} boxes")
     elif c == "drop":
         asyncio.ensure_future(_drop(float(cmd.get("lift", 0.4))))
+    elif c == "pile":
+        asyncio.ensure_future(_pile(int(cmd.get("count", 16))))
     elif c == "present":
         _present(cmd.get("on", True))
 

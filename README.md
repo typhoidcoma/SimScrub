@@ -8,7 +8,7 @@ Built for artists, not pipeline engineers: every step runs in the open, says wha
 
 <!-- DEMO VIDEO -->
 
-[![Isaac Sim drop test of the cleaned boxes](docs/media/isaac_drop.gif)](docs/media/simscrub_demo_1min.mp4)
+[![16 SimReady boxes dropped as a tower in Isaac Sim](docs/media/isaac_pile_drop.gif)](docs/media/simscrub_demo_1min.mp4)
 
 ---
 
@@ -102,7 +102,7 @@ MeshLab is native code, so repair and decimate each run in an **isolated child p
 
 - **Assemble** builds `stage.usda`: each SimReady asset as a USD **reference** (re-running SimReady updates the stage automatically), a floor collider, a physics scene with gravity, and lights. Positions are estimated from the video frame (phone assumed at 1.3 m height, tilted 20° down); a box seen sitting on another is **stacked**, and overlaps are pushed apart. Boxes spawn 2 cm up and settle under gravity. Eight stage checks run on the written file.
 - **Test physics** runs real PhysX in Isaac Sim with no window (`isaac/settle.py`) for 4 simulated seconds and reports, per box, how far it dropped, slid and tilted, and whether it came to rest.
-- **Launch Isaac** opens the stage in the full Isaac Sim window, framed so every box is in view. While it's open, the **Stage** tab drives it: **Drop test** lifts every box (40 cm, then 80 cm) and lets them fall onto the floor and each other; **Play** / **Stop** control the simulation. Drops are edited only in Isaac's session layer: the stage file on disk is never changed.
+- **Launch Isaac** opens the stage in the full Isaac Sim window, framed so every box is in view. While it's open, the **Stage** tab drives it: **Drop test** lifts every box 40 cm and lets them fall onto the floor and each other; **Pile drop ×16** hides the layout and drops 16 copies of your SimReady boxes as a tower onto stage centre, so you can watch rigid-body dynamics box on box; **Play** / **Stop** control the simulation. Both drops edit only Isaac's session layer: the stage file on disk is never changed.
 
 ---
 

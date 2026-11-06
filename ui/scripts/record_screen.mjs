@@ -6,7 +6,7 @@
 // while this script drives the app like a person: Capture -> Process ->
 // Segment (exclude BX-06) -> Reconstruct (Regenerate: live Tripo batch) ->
 // SimReady -> Stage (assemble + physics test) -> Launch Isaac Sim -> full
-// screen drop tests in Isaac -> back to the app.
+// screen drop test + 16-box pile drop in Isaac -> back to the app.
 //
 // --stage-only  just the Stage + Isaac finale (no Tripo spend)
 // --dry         use the mesh cache instead of a new Tripo batch
@@ -251,9 +251,9 @@ try {
   await api("/api/isaac/control?cmd=drop&lift=0.4", "POST");
   log("drop 1");
   await sleep(6000);
-  await api("/api/isaac/control?cmd=drop&lift=0.8", "POST");
-  log("drop 2");
-  await sleep(7000);
+  await api("/api/isaac/control?cmd=pile&count=16", "POST");
+  log("pile drop x16");
+  await sleep(10000);
 
   // ---------- back to the app ----------
   await api("/api/isaac/control?cmd=windowed", "POST");

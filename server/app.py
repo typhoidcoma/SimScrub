@@ -326,18 +326,18 @@ _control_id = 0
 
 
 @app.post("/api/isaac/control")
-def isaac_control(cmd: str, lift: float = 0.4) -> dict:
-    """Drive the open Isaac Sim window from the app: play, stop, or drop test."""
+def isaac_control(cmd: str, lift: float = 0.4, count: int = 16) -> dict:
+    """Drive the open Isaac Sim window from the app: play, stop, drop test, or pile drop."""
     global _control_id
-    if cmd not in ("play", "stop", "drop", "present", "windowed"):
-        raise HTTPException(400, "cmd must be play, stop, drop, present or windowed.")
+    if cmd not in ("play", "stop", "drop", "pile", "present", "windowed"):
+        raise HTTPException(400, "cmd must be play, stop, drop, pile, present or windowed.")
     if isaac_proc is None or isaac_proc.poll() is not None:
         raise HTTPException(409, "Isaac Sim isn't open. Launch it first.")
     _control_id += 1
     path = hub.job_dir / "isaac_control.json"
     tmp = path.with_suffix(".tmp")
     body = {"id": _control_id, "cmd": "present" if cmd == "windowed" else cmd,
-            "lift": max(0.0, min(lift, 2.0)), "on": cmd != "windowed"}
+            "lift": max(0.0, min(lift, 2.0)), "count": max(4, min(count, 32)), "on": cmd != "windowed"}
     tmp.write_text(json.dumps(body), encoding="utf-8")
     tmp.replace(path)   # atomic, so Isaac never reads half a file
     return {"ok": True, "id": _control_id}
