@@ -188,9 +188,9 @@ def _write_stage(path: Path, placed: list[Placed], floor: tuple[float, float]) -
 
     # Light so the scene isn't black when opened.
     dome = UsdLux.DomeLight.Define(stage, "/World/Lights/Dome")
-    dome.CreateIntensityAttr(600)
+    dome.CreateIntensityAttr(220)
     sun = UsdLux.DistantLight.Define(stage, "/World/Lights/Key")
-    sun.CreateIntensityAttr(2500)
+    sun.CreateIntensityAttr(1100)
     UsdGeom.XformCommonAPI(sun).SetRotate(Gf.Vec3f(-50, 0, 35))
 
     boxes = UsdGeom.Scope.Define(stage, "/World/Boxes")

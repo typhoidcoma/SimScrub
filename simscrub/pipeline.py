@@ -113,11 +113,12 @@ def reconstruct_plan(job: Job, job_dir: Path) -> dict:
     return p
 
 
-def run_reconstruct(job: Job, job_dir: Path, update: Update) -> None:
+def run_reconstruct(job: Job, job_dir: Path, update: Update, fresh: bool = False) -> None:
     kept = [a for a in job.assets if not a.excluded and a.crop]
     for a in job.assets:
         a.recon = Recon(source="tripo", status="queued") if a in kept else Recon()
-    _set(job, "reconstruct", Status.working, 0.0, f"Generating {len(kept)} meshes")
+    _set(job, "reconstruct", Status.working, 0.0,
+         f"{'Regenerating' if fresh else 'Generating'} {len(kept)} meshes")
     update(job)
 
     def changed(_asset) -> None:
@@ -126,7 +127,7 @@ def run_reconstruct(job: Job, job_dir: Path, update: Update) -> None:
         update(job)
 
     try:
-        reconstruct.reconstruct(job.assets, job_dir, changed)
+        reconstruct.reconstruct(job.assets, job_dir, changed, fresh=fresh)
     except Exception as e:  # noqa: BLE001 - e.g. bad key: every box falls back to proxy
         chip = chip_for(e)
         for a in kept:
@@ -211,11 +212,21 @@ def run_settle(job: Job, job_dir: Path, update: Update, seconds: float = 4.0) ->
         if not py.exists():
             raise FileNotFoundError("Isaac Sim isn't installed")
         env = {**os.environ, "OMNI_KIT_ACCEPT_EULA": "YES"}
-        with open(job_dir / "settle.log", "w", encoding="utf-8") as log:
-            r = subprocess.run([str(py), str(ROOT / "isaac" / "settle.py"), str(job_dir / "stage.usda"), str(out),
-                                str(seconds)], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+        retried = False
+        for attempt in (1, 2):
+            with open(job_dir / "settle.log", "w", encoding="utf-8") as log:
+                r = subprocess.run([str(py), str(ROOT / "isaac" / "settle.py"), str(job_dir / "stage.usda"), str(out),
+                                    str(seconds)], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+            if out.exists():
+                break
+            # Isaac Sim occasionally crashes during startup (seen ~1 in 6 runs on an
+            # 8 GB laptop GPU). That says nothing about the asset: try once more.
+            if attempt == 1:
+                retried = True
+                st.detail = f"Isaac Sim crashed on startup (exit {r.returncode}); retrying"
+                update(job)
         if not out.exists():
-            raise RuntimeError(f"Isaac Sim exited ({r.returncode}) without a result; see settle.log")
+            raise RuntimeError(f"Isaac Sim exited ({r.returncode}) without a result twice; see settle.log")
         res = json.loads(out.read_text())
         boxes = res["boxes"]
         rest = sum(1 for b in boxes.values() if b["speed_cm_s"] < 1.0)
@@ -223,6 +234,8 @@ def run_settle(job: Job, job_dir: Path, update: Update, seconds: float = 4.0) ->
         st.detail = (f"{rest}/{len(boxes)} at rest after {seconds:.0f}s · max drop "
                      f"{max(b['drop_cm'] for b in boxes.values()):.1f} cm · max slide "
                      f"{max(b['slide_cm'] for b in boxes.values()):.1f} cm · {time.time() - t0:.0f}s")
+        if retried:
+            st.detail += " · retried after a startup crash"
         st.more = "Real PhysX in Isaac Sim 5.1, no window. Per box: " + "; ".join(
             f"{k}: dropped {b['drop_cm']} cm, slid {b['slide_cm']} cm, tilted {b['tilt_deg']}°, "
             f"{b['speed_cm_s']} cm/s at the end" for k, b in boxes.items())

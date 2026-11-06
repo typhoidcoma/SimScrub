@@ -90,7 +90,7 @@ export default function App() {
               <SegmentPanel job={job} onToggle={(id) => run(`/api/assets/${id}/exclude`)} />
             </TabVisible.Provider></div>
             <div hidden={active !== "reconstruct"}><TabVisible.Provider value={active === "reconstruct"}>
-              <ReconstructPanel job={job} busy={busy} onGenerate={() => { setPicked(null); run("/api/reconstruct"); }} />
+              <ReconstructPanel job={job} busy={busy} onGenerate={(fresh) => { setPicked(null); run(`/api/reconstruct${fresh ? "?fresh=true" : ""}`); }} />
             </TabVisible.Provider></div>
             <div hidden={active !== "simready"}><TabVisible.Provider value={active === "simready"}>
               <SimReadyPanel job={job} busy={busy} onRun={() => { setPicked(null); run("/api/simready"); }} />

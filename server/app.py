@@ -144,7 +144,7 @@ async def reconstruct_plan() -> dict:
 
 
 @app.post("/api/reconstruct")
-async def reconstruct_run() -> dict:
+async def reconstruct_run(fresh: bool = False) -> dict:
     if hub.busy:
         raise HTTPException(409, "A run is already in progress.")
     if not any(not a.excluded and a.crop for a in hub.job.assets):
@@ -154,7 +154,7 @@ async def reconstruct_run() -> dict:
 
     def run() -> None:
         try:
-            pipeline.run_reconstruct(job, job_dir, hub.push_from_thread)
+            pipeline.run_reconstruct(job, job_dir, hub.push_from_thread, fresh=fresh)
         except Exception:  # noqa: BLE001
             job.log.append(LogLine(t=0, stage="error", text=traceback.format_exc(limit=3)))
             job.save(job_dir / "manifest.json")
@@ -290,8 +290,11 @@ def isaac_launch(play: bool = False) -> dict:
     status.unlink(missing_ok=True)
     # D3D12: Isaac Sim's default Vulkan path crashes in rtx.scenedb on 8 GB laptop GPUs.
     cmd = [str(ISAAC_EXE), "isaacsim.exp.full.kit", "--/app/vulkan=false", "--exec", str(script)]
+    control = hub.job_dir / "isaac_control.json"
+    control.unlink(missing_ok=True)
     env = {**os.environ, "OMNI_KIT_ACCEPT_EULA": "YES", "SIMSCRUB_STAGE": str(stage.resolve()),
-           "SIMSCRUB_STATUS": str(status.resolve()), "SIMSCRUB_PLAY": "1" if play else "0"}
+           "SIMSCRUB_STATUS": str(status.resolve()), "SIMSCRUB_CONTROL": str(control.resolve()),
+           "SIMSCRUB_PLAY": "1" if play else "0"}
     log = open(hub.job_dir / "isaac.log", "w", encoding="utf-8")
     isaac_proc = subprocess.Popen(cmd, cwd=str(ISAAC_VENV), env=env, stdout=log, stderr=subprocess.STDOUT,
                                   creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
@@ -317,6 +320,27 @@ async def stage_settle() -> dict:
 
     hub.task = asyncio.create_task(asyncio.to_thread(run))
     return {"ok": True}
+
+
+_control_id = 0
+
+
+@app.post("/api/isaac/control")
+def isaac_control(cmd: str, lift: float = 0.4) -> dict:
+    """Drive the open Isaac Sim window from the app: play, stop, or drop test."""
+    global _control_id
+    if cmd not in ("play", "stop", "drop", "present", "windowed"):
+        raise HTTPException(400, "cmd must be play, stop, drop, present or windowed.")
+    if isaac_proc is None or isaac_proc.poll() is not None:
+        raise HTTPException(409, "Isaac Sim isn't open. Launch it first.")
+    _control_id += 1
+    path = hub.job_dir / "isaac_control.json"
+    tmp = path.with_suffix(".tmp")
+    body = {"id": _control_id, "cmd": "present" if cmd == "windowed" else cmd,
+            "lift": max(0.0, min(lift, 2.0)), "on": cmd != "windowed"}
+    tmp.write_text(json.dumps(body), encoding="utf-8")
+    tmp.replace(path)   # atomic, so Isaac never reads half a file
+    return {"ok": True, "id": _control_id}
 
 
 @app.get("/api/videos")

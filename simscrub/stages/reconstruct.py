@@ -42,7 +42,7 @@ def cached(crop: Path) -> Path | None:
 
 
 def plan(assets: list[Asset], job_dir: Path) -> dict:
-    """What a run would cost, before spending anything."""
+    """What a run would cost, before spending anything (cached and fresh)."""
     todo = [a for a in assets if not a.excluded and a.crop]
     hits = [a for a in todo if cached(job_dir / a.crop)]
     need = len(todo) - len(hits)
@@ -52,6 +52,8 @@ def plan(assets: list[Asset], job_dir: Path) -> dict:
         "to_generate": need,
         "credits": need * tripo.CREDITS_PER_MODEL,
         "credits_per_model": tripo.CREDITS_PER_MODEL,
+        # "Regenerate": ignore the cache and buy a new mesh for every box.
+        "fresh_credits": len(todo) * tripo.CREDITS_PER_MODEL,
     }
 
 
@@ -97,7 +99,7 @@ def _meta_path(key: str) -> Path:
     return CACHE / f"{key}.json"
 
 
-def _generate(client: tripo.Tripo, a: Asset, job_dir: Path, changed: Changed) -> None:
+def _generate(client: tripo.Tripo, a: Asset, job_dir: Path, changed: Changed, fresh: bool = False) -> None:
     crop = job_dir / a.crop
     rel = f"meshes/{a.id}.glb"
     key = cache_key(crop)
@@ -111,7 +113,7 @@ def _generate(client: tripo.Tripo, a: Asset, job_dir: Path, changed: Changed) ->
         changed(a)
 
     try:
-        hit = cached(crop)
+        hit = None if fresh else cached(crop)
         if hit is not None:
             # Never pay twice: a cached GLB is always reused, stats or not.
             if _meta_path(key).exists():
@@ -178,8 +180,13 @@ def reconstruct(
     changed: Changed,
     client: tripo.Tripo | None = None,
     workers: int = 3,
+    fresh: bool = False,
 ) -> None:
-    """Generate a mesh for every kept box; proxies fill any gaps."""
+    """Generate a mesh for every kept box; proxies fill any gaps.
+
+    ``fresh`` ignores the cache and buys a new mesh for every box (the artist
+    asked for a regeneration); the new mesh replaces the cached one.
+    """
     todo = [a for a in assets if not a.excluded and a.crop]
     for a in todo:
         a.recon = Recon(source="tripo", status="queued")
@@ -187,7 +194,7 @@ def reconstruct(
         if a.excluded:
             a.recon = Recon()
 
-    need = [a for a in todo if not cached(job_dir / a.crop)]
+    need = [a for a in todo if fresh or not cached(job_dir / a.crop)]
     if need:
         client = client or tripo.Tripo()
         n = int(client.balance() // tripo.CREDITS_PER_MODEL)
@@ -200,4 +207,4 @@ def reconstruct(
 
     run = [a for a in todo if a.recon.status == "queued"]
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        list(pool.map(lambda a: _generate(client, a, job_dir, changed), run))
+        list(pool.map(lambda a: _generate(client, a, job_dir, changed, fresh), run))

@@ -282,6 +282,7 @@ interface Plan {
   to_generate: number;
   credits: number;
   credits_per_model: number;
+  fresh_credits: number;
   balance: number | null;
   chip: string | null;
 }
@@ -416,7 +417,7 @@ function Inspector({ job, a, onClose }: { job: Job; a: Asset; onClose: () => voi
   );
 }
 
-export function ReconstructPanel({ job, busy, onGenerate }: { job: Job | null; busy: boolean; onGenerate: () => void }) {
+export function ReconstructPanel({ job, busy, onGenerate }: { job: Job | null; busy: boolean; onGenerate: (fresh?: boolean) => void }) {
   const st = job?.stages.reconstruct;
   const assets = job?.assets.filter((a) => !a.excluded && a.crop) ?? [];
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -462,17 +463,29 @@ export function ReconstructPanel({ job, busy, onGenerate }: { job: Job | null; b
           <span className="spacer" />
           {broke ? (
             <>
-              <button className="btn btn-ghost" disabled={busy} onClick={onGenerate}>Use proxy boxes instead</button>
+              <button className="btn btn-ghost" disabled={busy} onClick={() => onGenerate(false)}>Use proxy boxes instead</button>
               <button className="btn btn-primary" disabled>Top up Tripo credits</button>
             </>
           ) : (
-            <button className="btn btn-primary" disabled={busy || !assets.length || !plan} onClick={onGenerate}>
-              {!plan
-                ? "Checking balance…"
-                : plan.to_generate === 0
-                  ? "Rebuild from cache"
-                  : `Generate ${short ? affordable : plan.to_generate} meshes`}
-            </button>
+            <>
+              {plan && plan.cached > 0 && (
+                <button
+                  className="btn btn-ghost"
+                  disabled={busy || !assets.length || (plan.balance !== null && plan.balance < plan.fresh_credits)}
+                  onClick={() => onGenerate(true)}
+                  title={`Ignore the cache and buy a new Tripo mesh for all ${plan.boxes} boxes (${plan.fresh_credits} credits)`}
+                >
+                  Regenerate · {plan.fresh_credits} cr
+                </button>
+              )}
+              <button className="btn btn-primary" disabled={busy || !assets.length || !plan} onClick={() => onGenerate(false)}>
+                {!plan
+                  ? "Checking balance…"
+                  : plan.to_generate === 0
+                    ? "Rebuild from cache"
+                    : `Generate ${short ? affordable : plan.to_generate} meshes`}
+              </button>
+            </>
           )}
         </div>
       )}
@@ -803,6 +816,12 @@ export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | nul
     return () => { live = false; window.clearInterval(t); };
   }, []);
 
+  const control = async (cmd: "play" | "stop" | "drop") => {
+    setLaunchErr(null);
+    const r = await fetch(`/api/isaac/control?cmd=${cmd}`, { method: "POST" });
+    if (!r.ok) setLaunchErr((await r.json().catch(() => ({}))).detail ?? "Isaac Sim didn't take the command");
+  };
+
   const launch = async (play: boolean) => {
     setLaunchErr(null);
     const r = await fetch(`/api/isaac/launch?play=${play}`, { method: "POST" });
@@ -816,6 +835,7 @@ export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | nul
       ? "Isaac Sim is starting… (first launch can take ~2 min)"
       : isaac.scene.state === "opened" ? `Isaac Sim · your stage is open · ${isaac.scene.detail}`
       : isaac.scene.state === "playing" ? `Isaac Sim · playing · ${isaac.scene.detail}`
+      : isaac.scene.state === "dropping" ? `Isaac Sim · drop test · ${isaac.scene.detail}`
       : isaac.scene.state === "failed" ? "Isaac Sim couldn't open the stage"
       : "Isaac Sim · opening your stage…",
     installing: "Isaac Sim · installing…",
@@ -899,6 +919,16 @@ export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | nul
               Launch + play
             </button>
           </div>
+          {isaac?.state === "running" && isaac.scene && ["opened", "playing", "dropping"].includes(isaac.scene.state) && (
+            <div className="isaac-buttons">
+              <button className="btn btn-primary" onClick={() => control("drop")}
+                title="Reset, lift every box 40 cm and play: watch them fall and settle in Isaac Sim">
+                Drop test
+              </button>
+              <button className="btn btn-ghost" onClick={() => control("play")}>Play</button>
+              <button className="btn btn-ghost" onClick={() => control("stop")}>Stop</button>
+            </div>
+          )}
           {launchErr && <div className="chip">{launchErr}</div>}
           {isaac?.scene?.state === "failed" && <div className="chip">{isaac.scene.detail}</div>}
         </div>
