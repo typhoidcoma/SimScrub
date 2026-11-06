@@ -89,7 +89,14 @@ export default function App() {
             <div hidden={active !== "simready"}><TabVisible.Provider value={active === "simready"}>
               <SimReadyPanel job={job} busy={busy} onRun={() => { setPicked(null); run("/api/simready"); }} />
             </TabVisible.Provider></div>
-            <div hidden={active !== "stage"}><TabVisible.Provider value={active === "stage"}><StagePanel job={job} /></TabVisible.Provider></div>
+            <div hidden={active !== "stage"}><TabVisible.Provider value={active === "stage"}>
+              <StagePanel
+                job={job}
+                busy={busy}
+                onAssemble={() => { setPicked(null); run("/api/stage"); }}
+                onSettle={() => { setPicked(null); run("/api/stage/settle"); }}
+              />
+            </TabVisible.Provider></div>
           </div>
 
           <ProcessMonitor job={job} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />

@@ -10,6 +10,7 @@ type ModelViewerProps = DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLEleme
   "interaction-prompt"?: string;
   "shadow-intensity"?: string;
   exposure?: string;
+  "camera-orbit"?: string;
 };
 
 declare module "react" {

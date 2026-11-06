@@ -7,13 +7,16 @@ changes (the server broadcasts, the CLI prints), and saves the manifest.
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
+import time
 from pathlib import Path
 from typing import Callable
 
 from simscrub.errors import chip_for
-from simscrub.manifest import Job, Recon, Status
-from simscrub.stages import capture, reconstruct, segment, simready, tripo
+from simscrub.manifest import Check, Job, Recon, Status, Step
+from simscrub.stages import assemble, capture, reconstruct, segment, simready, tripo
 
 Update = Callable[[Job], None]
 
@@ -162,5 +165,82 @@ def run_simready(job: Job, job_dir: Path, update: Update) -> None:
     if flagged:
         msg += f" · {len(flagged)} need a look"
     _set(job, "simready", Status.attention if (failed or flagged) else Status.done, 1.0, msg)
+    job.save(job_dir / "manifest.json")
+    update(job)
+
+
+def run_stage(job: Job, job_dir: Path, update: Update) -> None:
+    _set(job, "stage", Status.working, 0.0, "Assembling stage.usda")
+    update(job)
+
+    def changed() -> None:
+        steps = job.stage.steps
+        done = sum(s.status in ("done", "skipped", "failed") for s in steps) / max(1, len(steps))
+        _set(job, "stage", Status.working, done)
+        update(job)
+
+    assemble.assemble(job, job_dir, changed)
+    failed = any(s.status == "failed" for s in job.stage.steps)
+    warn = any(c.status != "pass" for c in job.stage.checks)
+    n = len(job.stage.layout)
+    msg = "Stage assembly stopped" if failed else f"stage.usda · {n} boxes · ready for Isaac Sim"
+    _set(job, "stage", Status.failed if failed else (Status.attention if warn else Status.done), 1.0, msg)
+    job.save(job_dir / "manifest.json")
+    update(job)
+
+
+ISAAC_VENV = Path(os.environ.get("SIMSCRUB_ISAAC_VENV", Path.home() / ".simscrub" / "isaac-venv"))
+ROOT = Path(__file__).resolve().parent.parent
+SETTLE = "Physics settle test (Isaac Sim, headless)"
+
+
+def run_settle(job: Job, job_dir: Path, update: Update, seconds: float = 4.0) -> None:
+    """Drop the boxes in real Isaac Sim physics, headless, and report where they ended up."""
+    steps = [s for s in job.stage.steps if s.name != SETTLE]
+    st = Step(name=SETTLE, status="working", detail="Starting Isaac Sim (first run compiles shaders: minutes)")
+    job.stage.steps = steps + [st]
+    job.stage.checks = [c for c in job.stage.checks if c.rule not in ("settle_rest", "settle_floor")]
+    _set(job, "stage", Status.working, 0.5, "Testing physics in Isaac Sim")
+    update(job)
+
+    py = ISAAC_VENV / "Scripts" / "python.exe"
+    out = job_dir / "settle.json"
+    out.unlink(missing_ok=True)
+    t0 = time.time()
+    try:
+        if not py.exists():
+            raise FileNotFoundError("Isaac Sim isn't installed")
+        env = {**os.environ, "OMNI_KIT_ACCEPT_EULA": "YES"}
+        with open(job_dir / "settle.log", "w", encoding="utf-8") as log:
+            r = subprocess.run([str(py), str(ROOT / "isaac" / "settle.py"), str(job_dir / "stage.usda"), str(out),
+                                str(seconds)], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+        if not out.exists():
+            raise RuntimeError(f"Isaac Sim exited ({r.returncode}) without a result; see settle.log")
+        res = json.loads(out.read_text())
+        boxes = res["boxes"]
+        rest = sum(1 for b in boxes.values() if b["speed_cm_s"] < 1.0)
+        st.status = "done" if res["all_at_rest"] and res["none_fell_through"] else "failed"
+        st.detail = (f"{rest}/{len(boxes)} at rest after {seconds:.0f}s · max drop "
+                     f"{max(b['drop_cm'] for b in boxes.values()):.1f} cm · max slide "
+                     f"{max(b['slide_cm'] for b in boxes.values()):.1f} cm · {time.time() - t0:.0f}s")
+        st.more = "Real PhysX in Isaac Sim 5.1, no window. Per box: " + "; ".join(
+            f"{k}: dropped {b['drop_cm']} cm, slid {b['slide_cm']} cm, tilted {b['tilt_deg']}°, "
+            f"{b['speed_cm_s']} cm/s at the end" for k, b in boxes.items())
+        job.stage.checks += [
+            Check(rule="settle_rest", label="Comes to rest", status="pass" if res["all_at_rest"] else "warn",
+                  detail=f"{rest}/{len(boxes)} boxes still after {seconds:.0f}s"),
+            Check(rule="settle_floor", label="Nothing fell through the floor",
+                  status="pass" if res["none_fell_through"] else "fail",
+                  detail="all boxes above z=0" if res["none_fell_through"] else "a box ended below the floor"),
+        ]
+        for b in job.stage.layout:
+            r_ = boxes.get(b["id"].replace("-", "_"))
+            if r_:
+                b["settled"] = r_
+    except Exception as e:  # noqa: BLE001
+        st.status, st.detail = "failed", str(e) if isinstance(e, (FileNotFoundError, RuntimeError)) else chip_for(e)
+    ok = st.status == "done"
+    _set(job, "stage", Status.done if ok else Status.attention, 1.0,
+         "Physics verified in Isaac Sim" if ok else "Physics test needs a look")
     job.save(job_dir / "manifest.json")
     update(job)

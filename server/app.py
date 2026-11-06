@@ -8,7 +8,10 @@ every change. The manifest is small, so full snapshots keep the UI dumb.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import shutil
+import subprocess
 import time
 import traceback
 from pathlib import Path
@@ -218,6 +221,102 @@ async def set_measured(asset_id: str, m: Measure) -> dict:
             await hub.broadcast(hub.job)
             return {"ok": True}
     raise HTTPException(404, f"No asset {asset_id}.")
+
+
+@app.post("/api/stage")
+async def stage_run() -> dict:
+    if hub.busy:
+        raise HTTPException(409, "A run is already in progress.")
+    if not any(not a.excluded and a.usd for a in hub.job.assets):
+        raise HTTPException(400, "No SimReady assets yet. Run SimReady first.")
+    hub.loop = asyncio.get_running_loop()
+    job, job_dir = hub.job, hub.job_dir
+
+    def run() -> None:
+        try:
+            pipeline.run_stage(job, job_dir, hub.push_from_thread)
+        except Exception:  # noqa: BLE001
+            job.log.append(LogLine(t=0, stage="error", text=traceback.format_exc(limit=3)))
+            job.save(job_dir / "manifest.json")
+            hub.push_from_thread(job)
+
+    hub.task = asyncio.create_task(asyncio.to_thread(run))
+    return {"ok": True}
+
+
+ISAAC_VENV = Path(os.environ.get("SIMSCRUB_ISAAC_VENV", Path.home() / ".simscrub" / "isaac-venv"))
+ISAAC_EXE = ISAAC_VENV / "Scripts" / "isaacsim.exe"
+isaac_proc: subprocess.Popen | None = None
+
+
+@app.get("/api/isaac")
+def isaac_status() -> dict:
+    """Is Isaac Sim installed in its own venv, and is it already running from here?"""
+    py = ISAAC_VENV / "Scripts" / "python.exe"
+    version = None
+    if py.exists():
+        r = subprocess.run([str(py), "-c", "import importlib.metadata as m; print(m.version('isaacsim'))"],
+                           capture_output=True, text=True, timeout=30)
+        version = r.stdout.strip() or None
+    running = isaac_proc is not None and isaac_proc.poll() is None
+    if version and ISAAC_EXE.exists():
+        state = "running" if running else "ready"
+    elif py.exists():
+        state = "installing"
+    else:
+        state = "missing"
+    scene = None
+    sp = hub.job_dir / "isaac_status.json"
+    if running and sp.exists():
+        try:
+            scene = json.loads(sp.read_text(encoding="utf-8"))
+        except ValueError:
+            pass
+    return {"state": state, "version": version, "venv": str(ISAAC_VENV), "scene": scene}
+
+
+@app.post("/api/isaac/launch")
+def isaac_launch(play: bool = False) -> dict:
+    global isaac_proc
+    stage = hub.job_dir / "stage.usda"
+    if not stage.exists():
+        raise HTTPException(400, "Assemble the stage first.")
+    if not ISAAC_EXE.exists():
+        raise HTTPException(400, "Isaac Sim isn't installed yet.")
+    if isaac_proc is not None and isaac_proc.poll() is None:
+        raise HTTPException(409, "Isaac Sim is already open.")
+    script = ROOT / "isaac" / "open_stage.py"
+    status = hub.job_dir / "isaac_status.json"
+    status.unlink(missing_ok=True)
+    # D3D12: Isaac Sim's default Vulkan path crashes in rtx.scenedb on 8 GB laptop GPUs.
+    cmd = [str(ISAAC_EXE), "isaacsim.exp.full.kit", "--/app/vulkan=false", "--exec", str(script)]
+    env = {**os.environ, "OMNI_KIT_ACCEPT_EULA": "YES", "SIMSCRUB_STAGE": str(stage.resolve()),
+           "SIMSCRUB_STATUS": str(status.resolve()), "SIMSCRUB_PLAY": "1" if play else "0"}
+    log = open(hub.job_dir / "isaac.log", "w", encoding="utf-8")
+    isaac_proc = subprocess.Popen(cmd, cwd=str(ISAAC_VENV), env=env, stdout=log, stderr=subprocess.STDOUT,
+                                  creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    return {"ok": True, "pid": isaac_proc.pid}
+
+
+@app.post("/api/stage/settle")
+async def stage_settle() -> dict:
+    if hub.busy:
+        raise HTTPException(409, "A run is already in progress.")
+    if not (hub.job_dir / "stage.usda").exists():
+        raise HTTPException(400, "Assemble the stage first.")
+    hub.loop = asyncio.get_running_loop()
+    job, job_dir = hub.job, hub.job_dir
+
+    def run() -> None:
+        try:
+            pipeline.run_settle(job, job_dir, hub.push_from_thread)
+        except Exception:  # noqa: BLE001
+            job.log.append(LogLine(t=0, stage="error", text=traceback.format_exc(limit=3)))
+            job.save(job_dir / "manifest.json")
+            hub.push_from_thread(job)
+
+    hub.task = asyncio.create_task(asyncio.to_thread(run))
+    return {"ok": True}
 
 
 @app.get("/api/videos")

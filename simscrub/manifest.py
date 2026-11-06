@@ -100,14 +100,16 @@ class Capture(BaseModel):
     frames_extracted: int = 0
     duration: float | None = None     # seconds
     resolution: tuple[int, int] | None = None
-    measurements: list[Dims] = Field(default_factory=list)
 
 
 class StageInfo(BaseModel):
-    room: Dims | None = None  # centimetres
-    scale_source: str | None = None
-    usd: str | None = None
-    thumb: str | None = None
+    usd: str | None = None                  # job-relative stage.usda
+    preview: str | None = None              # job-relative GLB of the whole scene
+    floor_m: list[float] | None = None      # floor size, meters
+    total_mass_kg: float | None = None
+    layout: list[dict] = Field(default_factory=list)   # where each box was placed and why
+    steps: list[Step] = Field(default_factory=list)
+    checks: list[Check] = Field(default_factory=list)
 
 
 class LogLine(BaseModel):

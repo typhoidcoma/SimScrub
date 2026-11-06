@@ -2,8 +2,8 @@
 
 Tripo generates a mesh per kept box. Anything that can't be generated
 (no credits, rejected image, timeout) becomes a PROXY: a cuboid with the
-box's on-screen proportions, which the SimReady stage later scales to the
-tape measurements. The pipeline never dead-ends on a bad generation.
+box's on-screen proportions, which the SimReady stage later scales to real
+size. The pipeline never dead-ends on a bad generation.
 """
 
 from __future__ import annotations

@@ -69,10 +69,17 @@ export interface Job {
     frames_extracted: number;
     duration: number | null;
     resolution: [number, number] | null;
-    measurements: Dims[];
   };
   assets: Asset[];
-  stage: { room: Dims | null; scale_source: string | null; usd: string | null; thumb: string | null };
+  stage: {
+    usd: string | null;
+    preview: string | null;
+    floor_m: number[] | null;
+    total_mass_kg: number | null;
+    layout: { id: string; x: number; y: number; z: number; on: string | null; source: string }[];
+    steps: Step[];
+    checks: Check[];
+  };
   log: { t: number; stage: string; text: string }[];
 }
 

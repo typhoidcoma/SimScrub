@@ -111,6 +111,20 @@ def simready_cmd(job: str = typer.Option("office", help="Job folder name under j
             typer.echo(f"      {c.status:<4} {c.label:<20} {c.detail}")
 
 
+@app.command("assemble")
+def assemble_cmd(job: str = typer.Option("office", help="Job folder name under jobs/")):
+    """Assemble all SimReady assets into one physics-ready stage.usda."""
+    j, job_dir = _job(job)
+    pipeline.run_stage(j, job_dir, lambda _j: None)
+    typer.echo(j.stages["stage"].message)
+    for s in j.stage.steps:
+        typer.echo(f"  [{s.status:<7}] {s.name:<18} {s.detail}")
+    for c in j.stage.checks:
+        typer.echo(f"      {c.status:<4} {c.label:<26} {c.detail}")
+    for b in j.stage.layout:
+        typer.echo(f"  {b['id']}  x={b['x']:+.2f} y={b['y']:+.2f} z={b['z']:.2f}  {b['on'] and 'on ' + b['on'] or ''}  {b['source']}")
+
+
 @app.command("validate")
 def validate_cmd(path: Path = typer.Argument(..., exists=True, help="Asset .usda/.usd")):
     """Run the SimReady rule set against any USD asset."""

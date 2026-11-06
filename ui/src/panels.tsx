@@ -202,7 +202,7 @@ const STEP_DOT: Record<Step["status"], string> = {
   waiting: "idle", working: "working", done: "done", skipped: "fixed", failed: "fail",
 };
 
-function MeshView({ src, auto = true }: { src: string; auto?: boolean }) {
+function MeshView({ src, auto = true, orbit }: { src: string; auto?: boolean; orbit?: string }) {
   const visible = useContext(TabVisible);
   if (!visible) return null;
   return (
@@ -217,6 +217,7 @@ function MeshView({ src, auto = true }: { src: string; auto?: boolean }) {
       shadow-intensity="0.7"
       exposure="1.1"
       title="Drag to orbit · scroll to zoom"
+      camera-orbit={orbit}
     />
   );
 }
@@ -303,7 +304,7 @@ function Inspector({ job, a, onClose }: { job: Job; a: Asset; onClose: () => voi
             <StepList steps={r.steps} />
             <div className="note">
               This is the mesh exactly as Tripo returned it. Nothing has been cleaned yet. SimReady decimates it,
-              orients it, scales it to tape measurements and adds physics, each as a visible step.
+              orients it, scales it to real size and adds physics, each as a visible step.
             </div>
           </aside>
         </div>
@@ -588,26 +589,114 @@ export function SimReadyPanel({ job, busy, onRun }: { job: Job | null; busy: boo
 }
 
 /* ---------------- 05 STAGE ---------------- */
-export function StagePanel({ job }: { job: Job | null }) {
+export function StagePanel({ job, busy, onAssemble, onSettle }: { job: Job | null; busy: boolean; onAssemble: () => void; onSettle: () => void }) {
   const st = job?.stages.stage;
   const info = job?.stage;
-  const ready = st?.status === "done";
+  const ready = !!info?.usd && st?.status !== "working";
+  const simDone = job && ["done", "attention"].includes(job.stages.simready.status);
+  const preview = job && info?.preview ? `${fileUrl(job, info.preview)}?v=${info.layout.length}-${info.floor_m?.[0] ?? 0}` : undefined;
+  const [isaac, setIsaac] = useState<{ state: string; version: string | null; scene?: { state: string; detail: string } | null } | null>(null);
+  const [launchErr, setLaunchErr] = useState<string | null>(null);
+  const [showChecks, setShowChecks] = useState(false);
+  const allPass = !!info?.checks.length && info.checks.every((c) => c.status === "pass");
+
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      fetch("/api/isaac").then((r) => r.json()).then((s) => live && setIsaac(s)).catch(() => {});
+    load();
+    const t = window.setInterval(load, 4000);
+    return () => { live = false; window.clearInterval(t); };
+  }, []);
+
+  const launch = async (play: boolean) => {
+    setLaunchErr(null);
+    const r = await fetch(`/api/isaac/launch?play=${play}`, { method: "POST" });
+    if (!r.ok) setLaunchErr((await r.json().catch(() => ({}))).detail ?? "Could not launch Isaac Sim");
+    else setIsaac((s) => (s ? { ...s, state: "running" } : s));
+  };
+
+  const isaacLabel: Record<string, string> = {
+    ready: `Isaac Sim ${isaac?.version ?? ""} · ready`,
+    running: !isaac?.scene
+      ? "Isaac Sim is starting… (first launch can take ~2 min)"
+      : isaac.scene.state === "opened" ? `Isaac Sim · your stage is open · ${isaac.scene.detail}`
+      : isaac.scene.state === "playing" ? `Isaac Sim · playing · ${isaac.scene.detail}`
+      : isaac.scene.state === "failed" ? "Isaac Sim couldn't open the stage"
+      : "Isaac Sim · opening your stage…",
+    installing: "Isaac Sim · installing…",
+    missing: "Isaac Sim · not installed",
+  };
+
   return (
     <Panel id="p-stage" n={5} title="Stage" state={st}>
-      <div className="stage-thumb">
-        {info?.thumb ? <img src={info.thumb} alt="Assembled stage" /> : <div className="frame-empty label dim">Assembled scene</div>}
-        <div className="grid-ov" />
+      <div className="stage-view">
+        {preview ? (
+          <MeshView src={preview} auto={false} orbit="-25deg 62deg 70%" />
+        ) : (
+          <div className="frame-empty label dim">{simDone ? "Press Assemble to build the scene" : "Run SimReady first"}</div>
+        )}
+        {preview && <span className="viewer-hint">Drag to orbit · scroll to zoom</span>}
       </div>
-      <div className="dim-tiles">
-        {(["l", "w", "h"] as const).map((k) => (
-          <div className="dim-tile" key={k}>
-            <span className="label dim">{{ l: "Length", w: "Width", h: "Height" }[k]}</span>
-            <b>{info?.room ? (info.room[k] / 100).toFixed(2) : "—"}<small>m</small></b>
+
+      <div className="stage-side">
+        <div className="dim-tiles">
+          <div className="dim-tile"><span className="label dim">Boxes</span><b>{info?.layout.length || "—"}</b></div>
+          <div className="dim-tile">
+            <span className="label dim">Floor</span>
+            <b>{info?.floor_m ? `${info.floor_m[0].toFixed(1)}×${info.floor_m[1].toFixed(1)}` : "—"}<small>m</small></b>
           </div>
-        ))}
+          <div className="dim-tile"><span className="label dim">Mass</span><b>{info?.total_mass_kg ?? "—"}<small>kg</small></b></div>
+        </div>
+
+        <button className="btn btn-primary btn-wide" disabled={busy || !simDone} onClick={onAssemble}>
+          {info?.usd ? "Re-assemble stage" : "Assemble stage"}
+        </button>
+
+        {info && info.steps.length > 0 && <StepList steps={info.steps} />}
+
+        {info && info.checks.length > 0 && (
+          <div className="stage-checks">
+            <div className="row">
+              <span className={`st ${allPass ? "pass" : "warn"}`}>
+                <span className={`dot ${allPass ? "pass" : "warn"}`} />
+                {info.checks.filter((c) => c.status === "pass").length} / {info.checks.length} stage checks pass
+              </span>
+              <span className="spacer" />
+              <button className="tag" onClick={() => setShowChecks((v) => !v)}>{showChecks ? "Hide" : "Checks"}</button>
+            </div>
+            {(showChecks || !allPass) && info.checks.map((c) => (
+              <div key={c.rule} className={`check-row ${c.status}`} title={c.detail}>
+                <span className={`dot ${c.status}`} />
+                {c.label}
+                <span className="d">{c.detail}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="isaac">
+          <StatusDot
+            s={isaac?.state === "ready" || isaac?.state === "running" ? "done" : isaac?.state === "installing" ? "working" : "idle"}
+            text={isaac ? isaacLabel[isaac.state] : "Checking Isaac Sim…"}
+          />
+          <div className="isaac-buttons">
+            <button className="btn btn-ghost" disabled={busy || !ready || isaac?.state === "missing" || isaac?.state === "installing"}
+              onClick={onSettle} title="Drop the boxes in real Isaac Sim physics without opening a window, and report where they land">
+              Test physics
+            </button>
+            <button className="btn btn-outline" disabled={!ready || isaac?.state !== "ready"} onClick={() => launch(false)}>
+              Launch Isaac
+            </button>
+            <button className="btn btn-ghost" disabled={!ready || isaac?.state !== "ready"} onClick={() => launch(true)}
+              title="Open the stage and press Play: boxes drop and settle">
+              Launch + play
+            </button>
+          </div>
+          {launchErr && <div className="chip">{launchErr}</div>}
+          {isaac?.scene?.state === "failed" && <div className="chip">{isaac.scene.detail}</div>}
+        </div>
       </div>
-      {info?.scale_source && <span className="label dim">{info.scale_source}</span>}
-      <button className="btn btn-outline btn-wide" disabled={!ready}>Launch Isaac Sim</button>
     </Panel>
   );
 }

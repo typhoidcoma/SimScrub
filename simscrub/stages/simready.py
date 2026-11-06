@@ -3,7 +3,7 @@
     1 Repair         floaters, duplicate verts, degenerate faces   (MeshLab, isolated)
     2 Decimate       ~1.4M -> ~20k tris, texture kept               (MeshLab, isolated)
     3 Orient         Z-up, sides aligned to X/Y, base on z = 0
-    4 Scale          true size from the tape measurements, in meters
+    4 Scale          real size in meters: tape measurement, else best guess from proportions
     5 Collider       convex hull for PhysX
     6 Physics+label  rigid body, cardboard mass and friction, class label
     7 Write USD      asset .usda + texture, plus a GLB for the viewer
@@ -257,6 +257,8 @@ def prepare(a: Asset, assets: list[Asset], job_dir: Path, changed: Changed) -> N
         bad = [c for c in a.checks if c.status in ("warn", "fail")]
         step("Validate", "failed" if any(c.status == "fail" for c in bad) else "done",
              f"{n_pass}/{len(a.checks)} checks pass" + (f" · {len(bad)} need a look" if bad else ""))
+        # Intermediate OBJs (hundreds of MB) are only needed for debugging a failure.
+        shutil.rmtree(work, ignore_errors=True)
     except Exception as e:  # noqa: BLE001 - show which step failed, in plain words
         traceback.print_exc()  # full detail for the developer log; the artist sees the chip
         step(current, "failed", chip_for(e))
