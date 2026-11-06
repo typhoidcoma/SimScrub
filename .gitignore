@@ -15,3 +15,4 @@ models/
 *.pt
 cache/
 recordings/
+.vscode/
